@@ -35,6 +35,8 @@ class EncoderLayer(nn.Module):
         positional_bias: Literal["bias", "rope", "none"] = "bias",
         positional_bias_n_spatial: int = 32,
         attn_dist_mode: str = "v0",
+        use_knn_attention: bool = False,
+        knn_neighbors: int = 12,
     ):
         super().__init__()
         self.positional_bias = positional_bias
@@ -49,6 +51,8 @@ class EncoderLayer(nn.Module):
             dropout=dropout,
             mode=positional_bias,
             attn_dist_mode=attn_dist_mode,
+            use_knn_attention=use_knn_attention,
+            knn_neighbors=knn_neighbors,
         )
         self.mlp = FeedForward(d_model)
         self.norm1 = nn.LayerNorm(d_model)
@@ -59,6 +63,7 @@ class EncoderLayer(nn.Module):
         x: torch.Tensor,
         coords: torch.Tensor,
         padding_mask: torch.Tensor = None,
+        knn_indices: torch.Tensor = None,
     ):
         x = self.norm1(x)
 
@@ -67,8 +72,9 @@ class EncoderLayer(nn.Module):
             x,
             x,
             x,
-            coords=coords if self.positional_bias else None,
+            coords,
             padding_mask=padding_mask,
+            knn_indices=knn_indices,
         )
 
         x = x + a
@@ -89,6 +95,8 @@ class DecoderLayer(nn.Module):
         positional_bias: Literal["bias", "rope", "none"] = "bias",
         positional_bias_n_spatial: int = 32,
         attn_dist_mode: str = "v0",
+        use_knn_attention: bool = False,
+        knn_neighbors: int = 12,
     ):
         super().__init__()
         self.positional_bias = positional_bias
@@ -103,6 +111,8 @@ class DecoderLayer(nn.Module):
             dropout=dropout,
             mode=positional_bias,
             attn_dist_mode=attn_dist_mode,
+            use_knn_attention=use_knn_attention,
+            knn_neighbors=knn_neighbors,
         )
 
         self.mlp = FeedForward(d_model)
@@ -116,6 +126,7 @@ class DecoderLayer(nn.Module):
         y: torch.Tensor,
         coords: torch.Tensor,
         padding_mask: torch.Tensor = None,
+        knn_indices: torch.Tensor = None,
     ):
         x = self.norm1(x)
         y = self.norm2(y)
@@ -125,8 +136,9 @@ class DecoderLayer(nn.Module):
             x,
             y,
             y,
-            coords=coords if self.positional_bias else None,
+            coords,
             padding_mask=padding_mask,
+            knn_indices=knn_indices,
         )
 
         x = x + a
@@ -288,6 +300,8 @@ class TrackingTransformer(torch.nn.Module):
             "none", "linear", "softmax", "quiet_softmax"
         ] = "quiet_softmax",
         attn_dist_mode: str = "v0",
+        use_knn_attention: bool = False,
+        knn_neighbors: int = 12,
     ):
         super().__init__()
 
@@ -307,6 +321,8 @@ class TrackingTransformer(torch.nn.Module):
             feat_embed_per_dim=feat_embed_per_dim,
             causal_norm=causal_norm,
             attn_dist_mode=attn_dist_mode,
+            use_knn_attention=use_knn_attention,
+            knn_neighbors=knn_neighbors,
         )
 
         # TODO remove, alredy present in self.config
@@ -330,6 +346,8 @@ class TrackingTransformer(torch.nn.Module):
                 positional_bias=attn_positional_bias,
                 positional_bias_n_spatial=attn_positional_bias_n_spatial,
                 attn_dist_mode=attn_dist_mode,
+                use_knn_attention=use_knn_attention,
+                knn_neighbors=knn_neighbors,
             )
             for _ in range(num_encoder_layers)
         ])
@@ -344,6 +362,8 @@ class TrackingTransformer(torch.nn.Module):
                 positional_bias=attn_positional_bias,
                 positional_bias_n_spatial=attn_positional_bias_n_spatial,
                 attn_dist_mode=attn_dist_mode,
+                use_knn_attention=use_knn_attention,
+                knn_neighbors=knn_neighbors,
             )
             for _ in range(num_decoder_layers)
         ])
@@ -367,7 +387,7 @@ class TrackingTransformer(torch.nn.Module):
 
         # self.pos_embed = NoPositionalEncoding(d=pos_embed_per_dim * (1 + coord_dim))
 
-    def forward(self, coords, features=None, padding_mask=None):
+    def forward(self, coords, features=None, padding_mask=None, knn_indices=None):
         assert coords.ndim == 3 and coords.shape[-1] in (3, 4)
         _B, _N, _D = coords.shape
 
@@ -392,15 +412,23 @@ class TrackingTransformer(torch.nn.Module):
         features = self.norm(features)
 
         x = features
+        
+        if self.config.get("use_knn_attention", False) and knn_indices is None and _N >= self.config.get("knn_neighbors", 12):
+            yx = coords[..., 1:]
+            dist_chunk = torch.cdist(yx.float(), yx.float())
+            if padding_mask is not None:
+                ignore_mask = padding_mask.unsqueeze(1)
+                dist_chunk.masked_fill_(ignore_mask, float('inf'))
+            _, knn_indices = torch.topk(dist_chunk, k=self.config.get("knn_neighbors", 12), dim=-1, largest=False)
 
         # encoder
         for enc in self.encoder:
-            x = enc(x, coords=coords, padding_mask=padding_mask)
+            x = enc(x, coords=coords, padding_mask=padding_mask, knn_indices=knn_indices)
 
         y = features
         # decoder w cross attention
         for dec in self.decoder:
-            y = dec(y, x, coords=coords, padding_mask=padding_mask)
+            y = dec(y, x, coords=coords, padding_mask=padding_mask, knn_indices=knn_indices)
             # y = dec(y, y, coords=coords, padding_mask=padding_mask)
 
         x = self.head_x(x)
