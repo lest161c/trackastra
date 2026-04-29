@@ -1,0 +1,35 @@
+name: vanvliet_mini
+epochs: 1
+warmup_epochs: 0
+augment: 0
+window: 4
+attn_dist_mode: v1
+delta_cutoff: 1
+num_encoder_layers: 2
+num_decoder_layers: 2
+causal_norm: quiet_softmax
+cache: true
+cachedir: runs/.cache_mini
+compress: true
+d_model: 128
+dropout: 0.05
+pos_embed_per_dim: 32
+feat_embed_per_dim: 8
+lr: 0.0001
+train_samples: 128
+max_tokens: 1024
+batch_size: 2
+detection_folders:
+- TRA
+crop_size:
+- 320
+- 320
+attn_positional_bias: rope
+features: wrfeat
+input_train:
+- ../data/vanvliet/recA/151027-05
+input_val:
+- ../data/vanvliet/recA/151031-03
+input_test: []
+use_knn_attention: true
+knn_neighbors: 32
