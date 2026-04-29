@@ -769,6 +769,8 @@ def train(args):
             attn_positional_bias_n_spatial=args.attn_positional_bias_n_spatial,
             attn_dist_mode=args.attn_dist_mode,
             causal_norm=args.causal_norm,
+            use_knn_attention=args.use_knn_attention,
+            knn_neighbors=args.knn_neighbors,
         )
 
         dummy_model_lightning = WrappedLightningModule(
@@ -903,6 +905,8 @@ def train(args):
             attn_positional_bias_n_spatial=args.attn_positional_bias_n_spatial,
             attn_dist_mode=args.attn_dist_mode,
             causal_norm=args.causal_norm,
+            use_knn_attention=args.use_knn_attention,
+            knn_neighbors=args.knn_neighbors,
         )
 
     model_lightning = WrappedLightningModule(
@@ -1028,6 +1032,10 @@ def parse_train_args():
     )
     parser.add_argument("--input_train", type=str, nargs="+")
     parser.add_argument("--input_val", type=str, nargs="*")
+    parser.add_argument("--input_test", type=str, nargs="*")
+    parser.add_argument("--cache", type=str2bool, default=True)
+    parser.add_argument("--use_knn_attention", type=str2bool, default=False)
+    parser.add_argument("--knn_neighbors", type=int, default=12)
     parser.add_argument("--downscale_temporal", type=int, default=1)
     parser.add_argument("--downscale_spatial", type=int, default=1)
     parser.add_argument("--spatial_pos_cutoff", type=int, default=256)
