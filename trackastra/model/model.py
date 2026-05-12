@@ -16,6 +16,7 @@ from trackastra.utils import blockwise_causal_norm
 
 from .model_parts import (
     FeedForward,
+    GatherSparseAttention,
     PositionalEncoding,
     RelativePositionalAttention,
 )
@@ -35,21 +36,25 @@ class EncoderLayer(nn.Module):
         positional_bias: Literal["bias", "rope", "none"] = "bias",
         positional_bias_n_spatial: int = 32,
         attn_dist_mode: str = "v0",
+        attention_layer: nn.Module = None,
     ):
         super().__init__()
         self.positional_bias = positional_bias
-        self.attn = RelativePositionalAttention(
-            coord_dim,
-            d_model,
-            num_heads,
-            cutoff_spatial=cutoff_spatial,
-            n_spatial=positional_bias_n_spatial,
-            cutoff_temporal=window,
-            n_temporal=window,
-            dropout=dropout,
-            mode=positional_bias,
-            attn_dist_mode=attn_dist_mode,
-        )
+        if attention_layer is not None:
+            self.attn = attention_layer
+        else:
+            self.attn = RelativePositionalAttention(
+                coord_dim,
+                d_model,
+                num_heads,
+                cutoff_spatial=cutoff_spatial,
+                n_spatial=positional_bias_n_spatial,
+                cutoff_temporal=window,
+                n_temporal=window,
+                dropout=dropout,
+                mode=positional_bias,
+                attn_dist_mode=attn_dist_mode,
+            )
         self.mlp = FeedForward(d_model)
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
@@ -89,21 +94,25 @@ class DecoderLayer(nn.Module):
         positional_bias: Literal["bias", "rope", "none"] = "bias",
         positional_bias_n_spatial: int = 32,
         attn_dist_mode: str = "v0",
+        attention_layer: nn.Module = None,
     ):
         super().__init__()
         self.positional_bias = positional_bias
-        self.attn = RelativePositionalAttention(
-            coord_dim,
-            d_model,
-            num_heads,
-            cutoff_spatial=cutoff_spatial,
-            n_spatial=positional_bias_n_spatial,
-            cutoff_temporal=window,
-            n_temporal=window,
-            dropout=dropout,
-            mode=positional_bias,
-            attn_dist_mode=attn_dist_mode,
-        )
+        if attention_layer is not None:
+            self.attn = attention_layer
+        else:
+            self.attn = RelativePositionalAttention(
+                coord_dim,
+                d_model,
+                num_heads,
+                cutoff_spatial=cutoff_spatial,
+                n_spatial=positional_bias_n_spatial,
+                cutoff_temporal=window,
+                n_temporal=window,
+                dropout=dropout,
+                mode=positional_bias,
+                attn_dist_mode=attn_dist_mode,
+            )
 
         self.mlp = FeedForward(d_model)
         self.norm1 = nn.LayerNorm(d_model)
@@ -288,6 +297,7 @@ class TrackingTransformer(torch.nn.Module):
             "none", "linear", "softmax", "quiet_softmax"
         ] = "quiet_softmax",
         attn_dist_mode: str = "v0",
+        knn_neighbors: int = -1,
     ):
         super().__init__()
 
@@ -307,17 +317,40 @@ class TrackingTransformer(torch.nn.Module):
             feat_embed_per_dim=feat_embed_per_dim,
             causal_norm=causal_norm,
             attn_dist_mode=attn_dist_mode,
+            knn_neighbors=knn_neighbors,
         )
-
-        # TODO remove, alredy present in self.config
-        # self.window = window
-        # self.feat_dim = feat_dim
-        # self.coord_dim = coord_dim
 
         self.proj = nn.Linear(
             (1 + coord_dim) * pos_embed_per_dim + feat_dim * feat_embed_per_dim, d_model
         )
         self.norm = nn.LayerNorm(d_model)
+
+        use_sparse = knn_neighbors > 0
+        if use_sparse:
+            attn_factory = lambda: GatherSparseAttention(
+                coord_dim,
+                d_model,
+                nhead,
+                cutoff_spatial=spatial_pos_cutoff,
+                cutoff_temporal=window,
+                dropout=dropout,
+                mode=attn_positional_bias,
+                attn_dist_mode=attn_dist_mode,
+                knn_neighbors=knn_neighbors,
+            )
+        else:
+            attn_factory = lambda: RelativePositionalAttention(
+                coord_dim,
+                d_model,
+                nhead,
+                cutoff_spatial=spatial_pos_cutoff,
+                n_spatial=attn_positional_bias_n_spatial,
+                cutoff_temporal=window,
+                n_temporal=window,
+                dropout=dropout,
+                mode=attn_positional_bias,
+                attn_dist_mode=attn_dist_mode,
+            )
 
         self.encoder = nn.ModuleList([
             EncoderLayer(
@@ -330,6 +363,7 @@ class TrackingTransformer(torch.nn.Module):
                 positional_bias=attn_positional_bias,
                 positional_bias_n_spatial=attn_positional_bias_n_spatial,
                 attn_dist_mode=attn_dist_mode,
+                attention_layer=attn_factory(),
             )
             for _ in range(num_encoder_layers)
         ])
@@ -344,6 +378,7 @@ class TrackingTransformer(torch.nn.Module):
                 positional_bias=attn_positional_bias,
                 positional_bias_n_spatial=attn_positional_bias_n_spatial,
                 attn_dist_mode=attn_dist_mode,
+                attention_layer=attn_factory(),
             )
             for _ in range(num_decoder_layers)
         ])
@@ -367,7 +402,7 @@ class TrackingTransformer(torch.nn.Module):
 
         # self.pos_embed = NoPositionalEncoding(d=pos_embed_per_dim * (1 + coord_dim))
 
-    def forward(self, coords, features=None, padding_mask=None):
+    def forward(self, coords, features=None, padding_mask=None, knn_indices=None):
         assert coords.ndim == 3 and coords.shape[-1] in (3, 4)
         _B, _N, _D = coords.shape
 
@@ -392,15 +427,24 @@ class TrackingTransformer(torch.nn.Module):
         features = self.norm(features)
 
         x = features
+        
+        knn = self.config.get("knn_neighbors", -1)
+        if knn > 0 and knn_indices is None and _N >= knn:
+            yx = coords[..., 1:]
+            dist_chunk = torch.cdist(yx.float(), yx.float())
+            if padding_mask is not None:
+                ignore_mask = padding_mask.unsqueeze(1)
+                dist_chunk.masked_fill_(ignore_mask, float('inf'))
+            _, knn_indices = torch.topk(dist_chunk, k=knn, dim=-1, largest=False)
 
         # encoder
         for enc in self.encoder:
-            x = enc(x, coords=coords, padding_mask=padding_mask)
+            x = enc(x, coords=coords, padding_mask=padding_mask, knn_indices=knn_indices)
 
         y = features
         # decoder w cross attention
         for dec in self.decoder:
-            y = dec(y, x, coords=coords, padding_mask=padding_mask)
+            y = dec(y, x, coords=coords, padding_mask=padding_mask, knn_indices=knn_indices)
             # y = dec(y, y, coords=coords, padding_mask=padding_mask)
 
         x = self.head_x(x)

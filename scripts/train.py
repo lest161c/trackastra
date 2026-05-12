@@ -769,6 +769,7 @@ def train(args):
             attn_positional_bias_n_spatial=args.attn_positional_bias_n_spatial,
             attn_dist_mode=args.attn_dist_mode,
             causal_norm=args.causal_norm,
+            knn_neighbors=args.knn_neighbors,
         )
 
         dummy_model_lightning = WrappedLightningModule(
@@ -903,6 +904,7 @@ def train(args):
             attn_positional_bias_n_spatial=args.attn_positional_bias_n_spatial,
             attn_dist_mode=args.attn_dist_mode,
             causal_norm=args.causal_norm,
+            knn_neighbors=args.knn_neighbors,
         )
 
     model_lightning = WrappedLightningModule(
@@ -1051,6 +1053,7 @@ def parse_train_args():
     )
     parser.add_argument("--attn_positional_bias_n_spatial", type=int, default=16)
     parser.add_argument("--attn_dist_mode", default="v0")
+    parser.add_argument("--knn_neighbors", type=int, default=-1)
     parser.add_argument("--mixedp", type=str2bool, default=True)
     parser.add_argument("--dry", action="store_true")
     parser.add_argument("--profile", action="store_true")
