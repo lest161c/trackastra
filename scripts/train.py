@@ -22,6 +22,7 @@ import psutil
 import trackastra
 import wandb
 import yaml
+
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from lightning.pytorch.profilers import PyTorchProfiler
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
@@ -29,6 +30,7 @@ from skimage.morphology import binary_dilation, disk
 from torch.optim.lr_scheduler import LRScheduler
 from torchvision.utils import make_grid
 from tqdm import tqdm
+from trackastra.data.ssl_pretrain import SSLPretrainDataset, collate_ssl
 from trackastra.data import (
     # load_ctc_data_from_subfolders,
     CTCData,
@@ -941,6 +943,45 @@ def train(args):
         else:
             logging.warning(f"No checkpoint found in {logdir}")
 
+    # === SSL Pretraining ===
+    if args.ssl_pretrain:
+        logger.info("Starting SSL pretraining on distorted frames")
+        ssl_dataset = SSLPretrainDataset(
+            root=args.input_train[0].rsplit("/", 1)[0] if len(args.input_train) == 1 else str(Path(args.input_train[0]).parent),
+            ndim=args.ndim,
+            features="regionprops2",
+            conditions=args.ssl_conditions,
+        )
+        ssl_loader = DataLoader(
+            ssl_dataset, batch_size=args.batch_size, shuffle=True,
+            collate_fn=collate_ssl, num_workers=min(4, args.num_workers),
+        )
+        ssl_opt = torch.optim.AdamW(model_lightning.parameters(), lr=args.lr)
+        model_lightning.train()
+        for epoch in range(1, args.ssl_epochs + 1):
+            t0 = default_timer()
+            losses = []
+            for batch in tqdm(ssl_loader, desc=f"SSL Epoch {epoch}", leave=False):
+                batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
+                ssl_opt.zero_grad()
+                out = model_lightning._common_step(batch)
+                out["loss"].backward()
+                torch.nn.utils.clip_grad_norm_(model_lightning.parameters(), 1.0)
+                ssl_opt.step()
+                losses.append(out["loss"].item())
+            logger.info(f"  SSL Epoch {epoch}: loss={np.mean(losses):.4f} [{default_timer()-t0:.0f}s]")
+        # Save SSL pretrained model
+        model.save(logdir / "ssl_pretrained")
+        logger.info(f"SSL model saved to {logdir / 'ssl_pretrained'}")
+        # Reload as initial model for fine-tuning
+        model = TrackingTransformer.from_folder(logdir / "ssl_pretrained", args=args)
+        model_lightning = WrappedLightningModule(
+            model=model, warmup_epochs=args.warmup_epochs, max_epochs=args.epochs,
+            learning_rate=args.lr, delta_cutoff=args.delta_cutoff,
+            causal_norm=args.causal_norm, tracking_frequency=args.tracking_frequency,
+            batch_val_tb_idx=batch_val_tb_idx, div_upweight=args.div_upweight,
+        )
+
     model_lightning.to(device)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logging.info(f"Model has {num_params / 1e6:.1f}M parameters")
@@ -1012,71 +1053,20 @@ def parse_train_args():
         help="load this model at start (e.g. to continue training)",
     )
     parser.add_argument(
-        "--ndim", type=int, default=2, help="number of spatial dimensions"
-    )
-    parser.add_argument("-d", "--d_model", type=int, default=256)
-    parser.add_argument("-w", "--window", type=int, default=10)
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--warmup_epochs", type=int, default=10)
-    parser.add_argument(
-        "--detection_folders",
-        type=str,
-        nargs="+",
-        default=["TRA"],
-        help=(
-            "Subfolders to search for detections. Defaults to `TRA`, which corresponds"
-            " to using only the GT."
-        ),
-    )
-    parser.add_argument("--input_train", type=str, nargs="+")
-    parser.add_argument("--input_val", type=str, nargs="*")
-    parser.add_argument("--downscale_temporal", type=int, default=1)
-    parser.add_argument("--downscale_spatial", type=int, default=1)
-    parser.add_argument("--spatial_pos_cutoff", type=int, default=256)
-    parser.add_argument("--from_subfolder", action="store_true")
-    parser.add_argument("--train_samples", type=int, default=50000)
-    parser.add_argument("--num_encoder_layers", type=int, default=6)
-    parser.add_argument("--num_decoder_layers", type=int, default=6)
-    parser.add_argument("--pos_embed_per_dim", type=int, default=32)
-    parser.add_argument("--feat_embed_per_dim", type=int, default=8)
-    parser.add_argument("--dropout", type=float, default=0.00)
-    parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--max_tokens", type=int, default=None)
-    parser.add_argument("--delta_cutoff", type=int, default=2)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument(
-        "--attn_positional_bias",
-        type=str,
-        choices=["rope", "bias", "none"],
-        default="rope",
-    )
-    parser.add_argument("--attn_positional_bias_n_spatial", type=int, default=16)
-    parser.add_argument("--attn_dist_mode", default="v0")
-    parser.add_argument("--knn_neighbors", type=int, default=-1)
-    parser.add_argument("--mixedp", type=str2bool, default=True)
-    parser.add_argument("--dry", action="store_true")
-    parser.add_argument("--profile", action="store_true")
-    parser.add_argument(
-        "--features",
-        type=str,
-        choices=[
-            "none",
-            "regionprops",
-            "regionprops2",
-            "patch",
-            "patch_regionprops",
-            "wrfeat",
-        ],
-        default="wrfeat",
+        "--div_upweight", type=float, default=2
     )
     parser.add_argument(
-        "--causal_norm",
-        type=str,
-        choices=["none", "linear", "softmax", "quiet_softmax"],
-        default="quiet_softmax",
+        "--ssl_pretrain", type=str2bool, default=False,
+        help="Enable SSL pretraining mode: geometric distortion pretext task"
     )
-    parser.add_argument("--div_upweight", type=float, default=2)
+    parser.add_argument(
+        "--ssl_epochs", type=int, default=5,
+        help="Number of SSL pretraining epochs"
+    )
+    parser.add_argument(
+        "--ssl_conditions", type=str, nargs="+", default=None,
+        help="Conditions to use for SSL pretraining (e.g. rpsM recA pheA)"
+    )
 
     parser.add_argument("--augment", type=int, default=3)
     parser.add_argument("--tracking_frequency", type=int, default=-1)
