@@ -943,38 +943,37 @@ def train(args):
         else:
             logging.warning(f"No checkpoint found in {logdir}")
 
-    # === SSL Pretraining ===
+    # === SSL Pretraining (cached) ===
     if args.ssl_pretrain:
-        logger.info("Starting SSL pretraining on distorted frames")
-        ssl_dataset = SSLPretrainDataset(
-            root=args.input_train[0].rsplit("/", 1)[0] if len(args.input_train) == 1 else str(Path(args.input_train[0]).parent),
-            ndim=args.ndim,
-            features="regionprops2",
-            conditions=args.ssl_conditions,
-        )
-        ssl_loader = DataLoader(
-            ssl_dataset, batch_size=args.batch_size, shuffle=True,
-            collate_fn=collate_ssl, num_workers=min(4, args.num_workers),
-        )
-        ssl_opt = torch.optim.AdamW(model_lightning.parameters(), lr=args.lr)
-        model_lightning.train()
-        for epoch in range(1, args.ssl_epochs + 1):
-            t0 = default_timer()
-            losses = []
-            for batch in tqdm(ssl_loader, desc=f"SSL Epoch {epoch}", leave=False):
-                batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
-                ssl_opt.zero_grad()
-                out = model_lightning._common_step(batch)
-                out["loss"].backward()
-                torch.nn.utils.clip_grad_norm_(model_lightning.parameters(), 1.0)
-                ssl_opt.step()
-                losses.append(out["loss"].item())
-            logger.info(f"  SSL Epoch {epoch}: loss={np.mean(losses):.4f} [{default_timer()-t0:.0f}s]")
-        # Save SSL pretrained model
-        model.save(logdir / "ssl_pretrained")
-        logger.info(f"SSL model saved to {logdir / 'ssl_pretrained'}")
-        # Reload as initial model for fine-tuning
-        model = TrackingTransformer.from_folder(logdir / "ssl_pretrained", args=args)
+        ssl_path = logdir / "ssl_pretrained"
+        if ssl_path.exists():
+            logger.info(f"SSL checkpoint exists at {ssl_path}, skipping pretraining")
+        else:
+            logger.info("Starting SSL pretraining on distorted frames")
+            ssl_dataset = SSLPretrainDataset(
+                root=args.input_train[0].rsplit("/", 1)[0] if len(args.input_train) == 1 else str(Path(args.input_train[0]).parent),
+                ndim=args.ndim, features="regionprops2", conditions=args.ssl_conditions,
+            )
+            ssl_loader = DataLoader(
+                ssl_dataset, batch_size=args.batch_size, shuffle=True,
+                collate_fn=collate_ssl, num_workers=min(4, args.num_workers),
+            )
+            ssl_opt = torch.optim.AdamW(model_lightning.parameters(), lr=args.lr)
+            model_lightning.train()
+            for epoch in range(1, args.ssl_epochs + 1):
+                t0 = default_timer(); losses = []
+                for batch in tqdm(ssl_loader, desc=f"SSL Epoch {epoch}", leave=False):
+                    batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
+                    ssl_opt.zero_grad()
+                    out = model_lightning._common_step(batch)
+                    out["loss"].backward()
+                    torch.nn.utils.clip_grad_norm_(model_lightning.parameters(), 1.0)
+                    ssl_opt.step(); losses.append(out["loss"].item())
+                logger.info(f"  SSL Epoch {epoch}: loss={np.mean(losses):.4f} [{default_timer()-t0:.0f}s]")
+            model.save(logdir / "ssl_pretrained")
+            logger.info(f"SSL model saved to {ssl_path}")
+        # Load SSL model (from checkpoint or freshly trained)
+        model = TrackingTransformer.from_folder(ssl_path, args=args)
         model_lightning = WrappedLightningModule(
             model=model, warmup_epochs=args.warmup_epochs, max_epochs=args.epochs,
             learning_rate=args.lr, delta_cutoff=args.delta_cutoff,
