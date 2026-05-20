@@ -28,6 +28,7 @@ from lightning.pytorch.profilers import PyTorchProfiler
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from skimage.morphology import binary_dilation, disk
 from torch.optim.lr_scheduler import LRScheduler
+from torch.utils.data import DataLoader
 from torchvision.utils import make_grid
 from tqdm import tqdm
 from trackastra.data.ssl_pretrain import SSLPretrainDataset, collate_ssl
