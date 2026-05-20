@@ -1067,6 +1067,72 @@ def parse_train_args():
         help="Conditions to use for SSL pretraining (e.g. rpsM recA pheA)"
     )
 
+    parser.add_argument(
+        "--ndim", type=int, default=2, help="number of spatial dimensions"
+    )
+    parser.add_argument("-d", "--d_model", type=int, default=256)
+    parser.add_argument("-w", "--window", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--warmup_epochs", type=int, default=10)
+    parser.add_argument(
+        "--detection_folders",
+        type=str,
+        nargs="+",
+        default=["TRA"],
+        help=(
+            "Subfolders to search for detections. Defaults to `TRA`, which corresponds"
+            " to using only the GT."
+        ),
+    )
+    parser.add_argument("--input_train", type=str, nargs="+")
+    parser.add_argument("--input_val", type=str, nargs="*")
+    parser.add_argument("--downscale_temporal", type=int, default=1)
+    parser.add_argument("--downscale_spatial", type=int, default=1)
+    parser.add_argument("--spatial_pos_cutoff", type=int, default=256)
+    parser.add_argument("--from_subfolder", action="store_true")
+    parser.add_argument("--train_samples", type=int, default=50000)
+    parser.add_argument("--num_encoder_layers", type=int, default=6)
+    parser.add_argument("--num_decoder_layers", type=int, default=6)
+    parser.add_argument("--pos_embed_per_dim", type=int, default=32)
+    parser.add_argument("--feat_embed_per_dim", type=int, default=8)
+    parser.add_argument("--dropout", type=float, default=0.00)
+    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--max_tokens", type=int, default=None)
+    parser.add_argument("--delta_cutoff", type=int, default=2)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument(
+        "--attn_positional_bias",
+        type=str,
+        choices=["rope", "bias", "none"],
+        default="rope",
+    )
+    parser.add_argument("--attn_positional_bias_n_spatial", type=int, default=16)
+    parser.add_argument("--attn_dist_mode", default="v0")
+    parser.add_argument("--knn_neighbors", type=int, default=-1)
+    parser.add_argument("--mixedp", type=str2bool, default=True)
+    parser.add_argument("--dry", action="store_true")
+    parser.add_argument("--profile", action="store_true")
+    parser.add_argument(
+        "--features",
+        type=str,
+        choices=[
+            "none",
+            "regionprops",
+            "regionprops2",
+            "patch",
+            "patch_regionprops",
+            "wrfeat",
+        ],
+        default="wrfeat",
+    )
+    parser.add_argument(
+        "--causal_norm",
+        type=str,
+        choices=["none", "linear", "softmax", "quiet_softmax"],
+        default="quiet_softmax",
+    )
+
     parser.add_argument("--augment", type=int, default=3)
     parser.add_argument("--tracking_frequency", type=int, default=-1)
 
