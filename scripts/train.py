@@ -687,6 +687,26 @@ def train(args):
     if args.model is None:
         logger.warning("Training from scratch, this is slow!\n")
 
+    # Expand experiment subdirectories if root has subdirs with TRA/ (vanvliet-style nested data)
+    def _expand_experiments(paths):
+        expanded = []
+        for p in paths:
+            root = Path(p)
+            if not root.exists():
+                expanded.append(p)
+                continue
+            subdirs = sorted(d for d in root.iterdir() if d.is_dir() and (d / "TRA").exists())
+            if subdirs:
+                logger.info(f"Expanded {p} -> {len(subdirs)} experiment subdirectories")
+                expanded.extend(str(d) for d in subdirs)
+            else:
+                expanded.append(p)
+        return expanded
+
+    args.input_train = _expand_experiments(args.input_train)
+    if args.input_val:
+        args.input_val = _expand_experiments(args.input_val)
+
     args.warmup_epochs = min(args.warmup_epochs, args.epochs)
 
     if args.delta_cutoff is None:
