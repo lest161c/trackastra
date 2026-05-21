@@ -401,10 +401,24 @@ class GatherSparseAttention(nn.Module):
         if self._mode == "bias" and coords is not None:
             attn_mask = self.pos_bias(coords, knn_indices)
 
-        y = F.scaled_dot_product_attention(
-            q_flat, k_flat, v_flat, attn_mask=attn_mask,
-            dropout_p=self.dropout if self.training else 0,
-        )
+        total = B * N
+        chunk = 16384  # FlashAttention grid z-dim limit / n_head
+        if total <= chunk:
+            y = F.scaled_dot_product_attention(
+                q_flat, k_flat, v_flat, attn_mask=attn_mask,
+                dropout_p=self.dropout if self.training else 0,
+            )
+        else:
+            y_parts = []
+            for start in range(0, total, chunk):
+                end = min(start + chunk, total)
+                m = attn_mask[start:end] if attn_mask is not None else None
+                y_parts.append(F.scaled_dot_product_attention(
+                    q_flat[start:end], k_flat[start:end], v_flat[start:end],
+                    attn_mask=m,
+                    dropout_p=self.dropout if self.training else 0,
+                ))
+            y = torch.cat(y_parts, dim=0)
 
         y = y.view(B, N, self.n_head, -1).transpose(1, 2)
         y = y.transpose(1, 2).contiguous().view(B, N, D)
