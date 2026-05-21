@@ -435,11 +435,15 @@ class TrackingTransformer(torch.nn.Module):
         knn = self.config.get("knn_neighbors", -1)
         if knn > 0 and knn_indices is None and _N >= knn:
             yx = coords[..., 1:]
-            dist_chunk = torch.cdist(yx.float(), yx.float())
-            if padding_mask is not None:
-                ignore_mask = padding_mask.unsqueeze(1)
-                dist_chunk.masked_fill_(ignore_mask, float('inf'))
-            _, knn_indices = torch.topk(dist_chunk, k=knn, dim=-1, largest=False)
+            B, N = yx.shape[:2]
+            knn_indices = torch.empty(B, N, knn, dtype=torch.long, device=coords.device)
+            for b in range(B):
+                yx_b = yx[b]
+                dist = torch.cdist(yx_b.float(), yx_b.float())
+                if padding_mask is not None:
+                    pm_b = padding_mask[b]
+                    dist.masked_fill_(pm_b.unsqueeze(1), float('inf'))
+                _, knn_indices[b] = torch.topk(dist, k=knn, dim=-1, largest=False)
 
         # encoder
         for enc in self.encoder:
