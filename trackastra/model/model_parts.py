@@ -366,6 +366,18 @@ class GatherSparseAttention(nn.Module):
             q, k = self.rot_pos_enc(q, k, coords)
 
         knn = self.knn_neighbors
+        if knn_indices is None or N < knn:
+            attn_mask = None
+            if padding_mask is not None:
+                attn_mask = padding_mask.unsqueeze(1).unsqueeze(2)
+                attn_mask = attn_mask * torch.finfo(q.dtype).min
+            y = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=attn_mask,
+                dropout_p=self.dropout if self.training else 0,
+            )
+            y = y.transpose(1, 2).contiguous().view(B, N, D)
+            y = self.proj(y)
+            return y
         B_idx = torch.arange(B, device=q.device).view(B, 1, 1, 1)
         B_idx_2d = B_idx.view(B, 1, 1)
         H_idx = torch.arange(self.n_head, device=q.device).view(
