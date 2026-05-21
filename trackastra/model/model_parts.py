@@ -224,6 +224,7 @@ class RelativePositionalAttention(nn.Module):
         value: torch.Tensor,
         coords: torch.Tensor,
         padding_mask: torch.Tensor = None,
+        **kwargs,
     ):
         B, N, D = query.size()
         q = self.q_pro(query)  # (B, N, D)

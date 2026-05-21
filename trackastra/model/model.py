@@ -64,6 +64,7 @@ class EncoderLayer(nn.Module):
         x: torch.Tensor,
         coords: torch.Tensor,
         padding_mask: torch.Tensor = None,
+        knn_indices: torch.Tensor = None,
     ):
         x = self.norm1(x)
 
@@ -74,6 +75,7 @@ class EncoderLayer(nn.Module):
             x,
             coords=coords if self.positional_bias else None,
             padding_mask=padding_mask,
+            knn_indices=knn_indices,
         )
 
         x = x + a
@@ -125,6 +127,7 @@ class DecoderLayer(nn.Module):
         y: torch.Tensor,
         coords: torch.Tensor,
         padding_mask: torch.Tensor = None,
+        knn_indices: torch.Tensor = None,
     ):
         x = self.norm1(x)
         y = self.norm2(y)
@@ -136,6 +139,7 @@ class DecoderLayer(nn.Module):
             y,
             coords=coords if self.positional_bias else None,
             padding_mask=padding_mask,
+            knn_indices=knn_indices,
         )
 
         x = x + a
