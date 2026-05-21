@@ -257,8 +257,8 @@ def blockwise_causal_norm(
             ma0 = blockwise_sum(A, timepoints, dim=0, reduce="amax")
             ma1 = blockwise_sum(A, timepoints, dim=1, reduce="amax")
 
-        u0 = torch.exp(A - ma0)
-        u1 = torch.exp(A - ma1)
+        u0 = torch.exp(A - ma0).nan_to_num(0.0)
+        u1 = torch.exp(A - ma1).nan_to_num(0.0)
 
     elif mode == "linear":
         A = torch.sigmoid(A)
@@ -293,7 +293,7 @@ def blockwise_causal_norm(
 
     # blockwise diagonal will be normalized along dim=0
     res = mask0 * u0 / u0_sum + mask1 * u1 / u1_sum
-    res = torch.clamp(res, 0, 1)
+    res = torch.clamp(res, 0, 1).nan_to_num(0.0)
 
     return res
 
