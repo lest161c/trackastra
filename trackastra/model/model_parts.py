@@ -376,10 +376,13 @@ class GatherSparseAttention(nn.Module):
             if padding_mask is not None:
                 attn_mask = padding_mask.unsqueeze(1).unsqueeze(2)
                 attn_mask = attn_mask * torch.finfo(q.dtype).min
-            y = F.scaled_dot_product_attention(
-                q, k, v, attn_mask=attn_mask,
-                dropout_p=self.dropout if self.training else 0,
-            )
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False, enable_mem_efficient=False, enable_math=True
+            ):
+                y = F.scaled_dot_product_attention(
+                    q, k, v, attn_mask=attn_mask,
+                    dropout_p=self.dropout if self.training else 0,
+                )
             y = y.transpose(1, 2).contiguous().view(B, N, D)
             y = self.proj(y)
             return y
@@ -466,15 +469,18 @@ class GatherSparseAttention(nn.Module):
         if attn_mask is not None:
             attn_mask = attn_mask.permute(0, 2, 1, 3).reshape(
                 B * N, self.n_head, 1, knn
-            )
+            ).contiguous()
 
-        y = F.scaled_dot_product_attention(
-            q_flat,
-            k_flat,
-            v_flat,
-            attn_mask=attn_mask,
-            dropout_p=self.dropout if self.training else 0,
-        )
+        with torch.backends.cuda.sdp_kernel(
+            enable_flash=False, enable_mem_efficient=False, enable_math=True
+        ):
+            y = F.scaled_dot_product_attention(
+                q_flat,
+                k_flat,
+                v_flat,
+                attn_mask=attn_mask,
+                dropout_p=self.dropout if self.training else 0,
+            )
 
         y = y.view(B, N, self.n_head, -1).transpose(1, 2)
         y = y.transpose(1, 2).contiguous().view(B, N, D)
