@@ -756,6 +756,7 @@ def train(args):
             sanity_dist=args.sanity_dist,
             crop_size=args.crop_size,
             compress=args.compress,
+            use_gt=args.use_gt,
         )
         dummy_model = TrackingTransformer(
             coord_dim=dummy_data.ndim,
@@ -820,6 +821,7 @@ def train(args):
         sanity_dist=args.sanity_dist,
         crop_size=args.crop_size,
         compress=args.compress,
+        use_gt=args.use_gt,
     )
     sampler_kwargs = dict(
         batch_size=args.batch_size,
@@ -1143,6 +1145,12 @@ def parse_train_args():
     parser.add_argument("--only_prechecks", action="store_true")
     parser.add_argument(
         "--compress", type=str2bool, default=True, help="compress dataset"
+    )
+    parser.add_argument(
+        "--use_gt",
+        type=str2bool,
+        default=True,
+        help="use ground truth data for evaluation. Set to False if only detections available.",
     )
     parser.add_argument(
         "--cachedir",
