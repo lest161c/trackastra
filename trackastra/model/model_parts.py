@@ -376,111 +376,35 @@ class GatherSparseAttention(nn.Module):
             if padding_mask is not None:
                 attn_mask = padding_mask.unsqueeze(1).unsqueeze(2)
                 attn_mask = attn_mask * torch.finfo(q.dtype).min
-            with torch.backends.cuda.sdp_kernel(
-                enable_flash=False, enable_mem_efficient=False, enable_math=True
-            ):
-                y = F.scaled_dot_product_attention(
-                    q, k, v, attn_mask=attn_mask,
-                    dropout_p=self.dropout if self.training else 0,
-                )
+            y = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=attn_mask,
+                dropout_p=self.dropout if self.training else 0,
+            )
             y = y.transpose(1, 2).contiguous().view(B, N, D)
             y = self.proj(y)
             return y
+
         B_idx = torch.arange(B, device=q.device).view(B, 1, 1, 1)
-        B_idx_2d = B_idx.view(B, 1, 1)
-        H_idx = torch.arange(self.n_head, device=q.device).view(
-            1, self.n_head, 1, 1
-        )
+        H_idx = torch.arange(self.n_head, device=q.device).view(1, self.n_head, 1, 1)
         idx = knn_indices.unsqueeze(1).expand(B, self.n_head, N, knn)
 
         k_sel = k[B_idx, H_idx, idx, :]
         v_sel = v[B_idx, H_idx, idx, :]
 
         q_flat = q.transpose(1, 2).reshape(B * N, self.n_head, 1, -1)
-        k_flat = k_sel.transpose(1, 2).contiguous().view(
-            B * N, self.n_head, knn, -1
-        )
-        v_flat = v_sel.transpose(1, 2).contiguous().view(
-            B * N, self.n_head, knn, -1
-        )
+        k_flat = k_sel.transpose(1, 2).contiguous().view(B * N, self.n_head, knn, -1)
+        del k_sel
+        v_flat = v_sel.transpose(1, 2).contiguous().view(B * N, self.n_head, knn, -1)
+        del v_sel
 
         attn_mask = None
-        if coords is not None:
-            yx = coords[..., 1:]
-            yx_knn = yx[B_idx_2d, knn_indices, :]
-            spatial_dist_knn = torch.norm(
-                yx.unsqueeze(-2) - yx_knn, dim=-1
-            )
+        if self._mode == "bias" and coords is not None:
+            attn_mask = self.pos_bias(coords, knn_indices)
 
-            if self._mode == "bias":
-                attn_mask = self.pos_bias(coords, knn_indices)
-
-            if self.attn_dist_mode in ("v0", "v1"):
-                if attn_mask is None:
-                    attn_mask = torch.zeros(
-                        B, self.n_head, N, knn,
-                        device=q.device, dtype=q.dtype,
-                    )
-                if self.attn_dist_mode == "v0":
-                    t = coords[..., 0:1]
-                    t_knn = t[B_idx_2d, knn_indices, :]
-                    c_knn = torch.cat([t_knn, yx_knn], dim=-1)
-                    dist_knn = torch.norm(
-                        coords.unsqueeze(-2) - c_knn, dim=-1
-                    )
-                    attn_mask = attn_mask + torch.exp(
-                        -0.1 * dist_knn.unsqueeze(1)
-                    )
-                elif self.attn_dist_mode == "v1":
-                    attn_mask = attn_mask + torch.exp(
-                        -5 * spatial_dist_knn.unsqueeze(1)
-                        / self.cutoff_spatial
-                    )
-
-            spatial_mask_knn = spatial_dist_knn > self.cutoff_spatial
-            if spatial_mask_knn.any():
-                if attn_mask is None:
-                    attn_mask = torch.zeros(
-                        B, self.n_head, N, knn,
-                        device=q.device, dtype=q.dtype,
-                    )
-                attn_ignore_val = -1e3
-                attn_mask = attn_mask.masked_fill(
-                    spatial_mask_knn.unsqueeze(1).expand(
-                        -1, self.n_head, -1, -1
-                    ),
-                    attn_ignore_val,
-                )
-
-        if padding_mask is not None:
-            pm = padding_mask[B_idx_2d, knn_indices]
-            if pm.any():
-                if attn_mask is None:
-                    attn_mask = torch.zeros(
-                        B, self.n_head, N, knn,
-                        device=q.device, dtype=q.dtype,
-                    )
-                attn_ignore_val = -1e3
-                attn_mask = attn_mask.masked_fill(
-                    pm.unsqueeze(1).expand(-1, self.n_head, -1, -1),
-                    attn_ignore_val,
-                )
-
-        if attn_mask is not None:
-            attn_mask = attn_mask.permute(0, 2, 1, 3).reshape(
-                B * N, self.n_head, 1, knn
-            ).contiguous()
-
-        with torch.backends.cuda.sdp_kernel(
-            enable_flash=False, enable_mem_efficient=False, enable_math=True
-        ):
-            y = F.scaled_dot_product_attention(
-                q_flat,
-                k_flat,
-                v_flat,
-                attn_mask=attn_mask,
-                dropout_p=self.dropout if self.training else 0,
-            )
+        y = F.scaled_dot_product_attention(
+            q_flat, k_flat, v_flat, attn_mask=attn_mask,
+            dropout_p=self.dropout if self.training else 0,
+        )
 
         y = y.view(B, N, self.n_head, -1).transpose(1, 2)
         y = y.transpose(1, 2).contiguous().view(B, N, D)
