@@ -224,7 +224,7 @@ class WrappedLightningModule(pl.LightningModule):
         if self.causal_norm != "none":
             # TODO speedup: I could softmax only the part of the matrix (upper triangular) that is not masked out
             A_pred_soft = torch.stack([
-                blockwise_causal_norm(_A, _t, mode=self.causal_norm, mask_invalid=_m)
+                blockwise_causal_norm(_A.float(), _t, mode=self.causal_norm, mask_invalid=_m)
                 for _A, _t, _m in zip(A_pred, timepoints, mask_invalid)
             ])
             with torch.cuda.amp.autocast(enabled=False):
