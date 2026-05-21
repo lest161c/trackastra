@@ -951,6 +951,7 @@ def train(args):
             logger.info(f"SSL checkpoint exists at {ssl_path}, skipping pretraining")
         else:
             logger.info("Starting SSL pretraining on distorted frames")
+            model_lightning.to(device)
             ssl_dataset = SSLPretrainDataset(
                 root=args.input_train[0].rsplit("/", 1)[0] if len(args.input_train) == 1 else str(Path(args.input_train[0]).parent),
                 ndim=args.ndim, features="regionprops2", conditions=args.ssl_conditions,
