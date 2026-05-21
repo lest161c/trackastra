@@ -227,6 +227,8 @@ class RelativePositionalAttention(nn.Module):
         **kwargs,
     ):
         B, N, D = query.size()
+        if N == 0:
+            return torch.zeros(B, 0, D, device=query.device, dtype=query.dtype)
         q = self.q_pro(query)  # (B, N, D)
         k = self.k_pro(key)  # (B, N, D)
         v = self.v_pro(value)  # (B, N, D)
