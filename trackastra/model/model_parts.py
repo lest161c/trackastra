@@ -354,6 +354,9 @@ class GatherSparseAttention(nn.Module):
         knn_indices: torch.Tensor = None,
     ):
         B, N, D = query.shape
+        if N == 0:
+            return torch.zeros(B, 0, D, device=query.device, dtype=query.dtype)
+
         q = self.q_pro(query)
         k = self.k_pro(key)
         v = self.v_pro(value)
