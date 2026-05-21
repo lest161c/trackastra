@@ -191,9 +191,6 @@ class CTCData(Dataset):
         self.root, self.gt_tra_folder = self._guess_root_and_gt_tra_folder(self.root)
         logger.info(f"ROOT (guessed): \t{self.root}")
         logger.info(f"GT TRA (guessed):\t{self.gt_tra_folder}")
-        if self.use_gt and not self.gt_tra_folder.exists():
-            logger.warning(f"GT folder {self.gt_tra_folder} not found — falling back to detection-only mode")
-            self.use_gt = False
         if self.use_gt:
             self.gt_mask_folder = self._guess_mask_folder(self.root, self.gt_tra_folder)
         else:

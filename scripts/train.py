@@ -687,26 +687,6 @@ def train(args):
     if args.model is None:
         logger.warning("Training from scratch, this is slow!\n")
 
-    # Expand experiment subdirectories if root has subdirs with TRA/ (vanvliet-style nested data)
-    def _expand_experiments(paths):
-        expanded = []
-        for p in paths:
-            root = Path(p)
-            if not root.exists():
-                expanded.append(p)
-                continue
-            subdirs = sorted(d for d in root.iterdir() if d.is_dir() and (d / "TRA").exists())
-            if subdirs:
-                logger.info(f"Expanded {p} -> {len(subdirs)} experiment subdirectories")
-                expanded.extend(str(d) for d in subdirs)
-            else:
-                expanded.append(p)
-        return expanded
-
-    args.input_train = _expand_experiments(args.input_train)
-    if args.input_val:
-        args.input_val = _expand_experiments(args.input_val)
-
     args.warmup_epochs = min(args.warmup_epochs, args.epochs)
 
     if args.delta_cutoff is None:
@@ -858,10 +838,24 @@ def train(args):
         collate_fn=collate_sequence_padding,
     )
 
+    # Expand nested experiment subdirs (vanvliet format: root/exp_name/TRA/) for CTCData
+    def _expand_experiments(paths):
+        expanded = []
+        for p in paths:
+            root = Path(p)
+            if not root.exists():
+                expanded.append(p)
+                continue
+            subdirs = sorted(d for d in root.iterdir() if d.is_dir() and (d / "TRA").exists())
+            expanded.extend(str(d) for d in subdirs) if subdirs else expanded.append(p)
+        return expanded
+
+    input_train_exp = _expand_experiments(args.input_train)
+    input_val_exp = _expand_experiments(args.input_val) if args.input_val else []
     # Sampler gets wrapped with distributed sampler, which cannot sample with replacement
     datamodule = BalancedDataModule(
-        input_train=args.input_train,
-        input_val=args.input_val,
+        input_train=input_train_exp,
+        input_val=input_val_exp,
         cachedir=args.cachedir,
         augment=args.augment,
         distributed=args.distributed,
