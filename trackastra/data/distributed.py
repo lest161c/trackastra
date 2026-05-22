@@ -308,7 +308,7 @@ class BalancedDataModule(LightningDataModule):
     def val_dataloader(self):
         val_loader_kwargs = deepcopy(self.loader_kwargs)
         val_loader_kwargs["persistent_workers"] = False
-        val_loader_kwargs["num_workers"] = 1
+        val_loader_kwargs["num_workers"] = min(7, self.loader_kwargs.get("num_workers", 1))
         return DataLoader(
             self.datasets["val"],
             shuffle=False,

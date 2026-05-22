@@ -127,7 +127,7 @@ class SSLPretrainDataset(Dataset):
         tgt_coords = feats_t.coords
         tgt_feats = feats_t.features
         tgt_labels = feats_t.labels
-        tgt_time = feats_t.timepoints
+        tgt_time = feats_t.timepoints + 1  # next frame so delta_cutoff mask allows dt=1
 
         # Identity association: match by label
         n_src, n_tgt = len(src_labels), len(tgt_labels)
@@ -156,7 +156,7 @@ class SSLPretrainDataset(Dataset):
 
         # Full association matrix (N_src+N_tgt × N_src+N_tgt)
         full_assoc = np.zeros((n_src + n_tgt, n_src + n_tgt), dtype=np.float32)
-        full_assoc[:n_src, :n_src] = assoc  # src→tgt only
+        full_assoc[:n_src, n_src:] = assoc  # src→tgt cross quadrant
 
         return {
             "coords": torch.from_numpy(coords).float(),
