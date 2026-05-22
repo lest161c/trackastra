@@ -683,6 +683,8 @@ def train(args):
     device = torch.device(
         "cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
     )
+    if args.ssl_only:
+        args.ssl_pretrain = True
     args.seed = seed(args.seed)
     if args.model is None:
         logger.warning("Training from scratch, this is slow!\n")
@@ -990,6 +992,9 @@ def train(args):
                 logger.info(f"  SSL Epoch {epoch}: loss={np.mean(losses):.4f} [{default_timer()-t0:.0f}s]")
             model.save(logdir / "ssl_pretrained")
             logger.info(f"SSL model saved to {ssl_path}")
+        if args.ssl_only:
+            logger.info("SSL-only mode, exiting.")
+            return
         # Load SSL model (from checkpoint or freshly trained)
         model = TrackingTransformer.from_folder(ssl_path, args=args)
         model_lightning = WrappedLightningModule(
@@ -1083,6 +1088,10 @@ def parse_train_args():
     parser.add_argument(
         "--ssl_conditions", type=str, nargs="+", default=None,
         help="Conditions to use for SSL pretraining (e.g. rpsM recA pheA)"
+    )
+    parser.add_argument(
+        "--ssl_only", type=str2bool, default=False,
+        help="Run SSL pretraining and exit (caches checkpoint for later runs)"
     )
 
     parser.add_argument(
