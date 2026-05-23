@@ -1,0 +1,75 @@
+name: sparse_k16_ssl
+epochs: 500
+warmup_epochs: 5
+ssl_epochs: 10
+ssl_only: false
+ssl_conditions:
+  - rpsM
+  - recA
+  - pheA
+  - metA
+  - cib
+  - trpL
+augment: 3
+window: 4
+attn_dist_mode: v0
+delta_cutoff: 1
+num_encoder_layers: 6
+num_decoder_layers: 6
+causal_norm: quiet_softmax
+cache: true
+cachedir: runs/.cache
+compress: true
+d_model: 320
+dropout: 0.05
+pos_embed_per_dim: 32
+feat_embed_per_dim: 8
+lr: 0.0001
+train_samples: 32000
+max_tokens: 2048
+batch_size: 48
+detection_folders:
+  - TRA
+attn_positional_bias: rope
+features: wrfeat
+knn_neighbors: 16
+mixedp: true
+num_workers: 8
+seed: 42
+
+# Per-experiment split (no leakage)
+input_train:
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/cib/140409-03
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/cib/140415-08
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/recA/151027-05
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/recA/151027-06
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/recA/151029-05
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/recA/151029-11
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/rpsM/151029_E1-6
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/rpsM/151101_E2-1
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/rpsM/151101_E2-2
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/rpsM/151101_E3-11
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/rpsM/151101_E4-12
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/metA/150317-07
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/metA/150318-06
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/metA/150331-12
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/metA/151222-10
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/metA/151222-11
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/pheA/150324-03
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/pheA/150324-05
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/pheA/150325-04
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/pheA/160112-04
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/trpL/150303-01
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/trpL/150428-08
+
+input_val:
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/recA/151031-03
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/trpL/151021-11
+
+input_test:
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/rpsM/151029_E1-1
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/rpsM/151029_E1-5
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/rpsM/151101_E3-12
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/trpL/150309-04
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/trpL/150310-11
+  - /data/cat/ws/mawe985g-data/data/celltracking/vanvliet/pheA/160112-06
