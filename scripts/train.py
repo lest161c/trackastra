@@ -970,8 +970,13 @@ def train(args):
         else:
             logger.info("Starting SSL pretraining on distorted frames")
             model_lightning.to(device)
+            # Find common parent of all input paths (go up from per-experiment subdirs to vanvliet root)
+            common_root = Path(args.input_train[0])
+            for p in args.input_train[1:]:
+                while common_root not in Path(p).parents:
+                    common_root = common_root.parent
             ssl_dataset = SSLPretrainDataset(
-                root=args.input_train[0].rsplit("/", 1)[0] if len(args.input_train) == 1 else str(Path(args.input_train[0]).parent),
+                root=str(common_root),
                 ndim=args.ndim, features="regionprops2", conditions=args.ssl_conditions,
             )
             ssl_loader = DataLoader(
