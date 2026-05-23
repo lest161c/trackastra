@@ -172,7 +172,11 @@ def collate_ssl(batch):
     """Collate SSL batch with padding, matching Trackastra's collate_sequence_padding."""
     max_n = max(b["coords"].shape[0] for b in batch)
     ndim = batch[0]["coords"].shape[-1]
-    feat_dim = batch[0]["features"].shape[-1] if batch[0]["features"].numel() > 0 else 0
+    feat_dim = 0
+    for b in batch:
+        if b["features"].numel() > 0:
+            feat_dim = b["features"].shape[-1]
+            break
     B = len(batch)
 
     coords = torch.zeros(B, max_n, ndim)
