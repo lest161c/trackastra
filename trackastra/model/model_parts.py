@@ -2,10 +2,10 @@
 
 import logging
 import math
-from typing import Literal
-
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from torch import nn
 
 from .rope import RotaryPositionalEncoding
@@ -289,6 +289,41 @@ class RelativePositionalAttention(nn.Module):
         return y
 
 
+def _sparse_sdpa(q, k, v, knn_indices, n_head, knn, dropout=0.0):
+    B, nH_, N, d_head = q.shape
+    knn = int(knn.item()) if isinstance(knn, torch.Tensor) else knn
+    n_head = int(n_head.item()) if isinstance(n_head, torch.Tensor) else n_head
+    drop_p = dropout.item() if isinstance(dropout, torch.Tensor) else dropout
+
+    B_idx = torch.arange(B, device=q.device).view(B, 1, 1, 1)
+    H_idx = torch.arange(n_head, device=q.device).view(1, n_head, 1, 1)
+    idx = knn_indices.unsqueeze(1).expand(B, n_head, N, knn)
+
+    k_sel = k[B_idx, H_idx, idx, :]
+    v_sel = v[B_idx, H_idx, idx, :]
+
+    q_flat = q.transpose(1, 2).reshape(B * N, n_head, 1, -1)
+    k_flat = k_sel.transpose(1, 2).contiguous().view(B * N, n_head, knn, -1)
+    del k_sel
+    v_flat = v_sel.transpose(1, 2).contiguous().view(B * N, n_head, knn, -1)
+    del v_sel
+
+    total = B * N
+    chunk = 16384
+    if total <= chunk:
+        y = F.scaled_dot_product_attention(q_flat, k_flat, v_flat, dropout_p=drop_p)
+    else:
+        y_parts = []
+        for start in range(0, total, chunk):
+            end = min(start + chunk, total)
+            y_parts.append(F.scaled_dot_product_attention(
+                q_flat[start:end], k_flat[start:end], v_flat[start:end],
+                dropout_p=drop_p,
+            ))
+        y = torch.cat(y_parts, dim=0)
+    return y
+
+
 class GatherSparseAttention(nn.Module):
     """Gather-based sparse attention — O(Nk) memory, no N×N mask.
 
@@ -384,41 +419,16 @@ class GatherSparseAttention(nn.Module):
             y = self.proj(y)
             return y
 
-        B_idx = torch.arange(B, device=q.device).view(B, 1, 1, 1)
-        H_idx = torch.arange(self.n_head, device=q.device).view(1, self.n_head, 1, 1)
-        idx = knn_indices.unsqueeze(1).expand(B, self.n_head, N, knn)
-
-        k_sel = k[B_idx, H_idx, idx, :]
-        v_sel = v[B_idx, H_idx, idx, :]
-
-        q_flat = q.transpose(1, 2).reshape(B * N, self.n_head, 1, -1)
-        k_flat = k_sel.transpose(1, 2).contiguous().view(B * N, self.n_head, knn, -1)
-        del k_sel
-        v_flat = v_sel.transpose(1, 2).contiguous().view(B * N, self.n_head, knn, -1)
-        del v_sel
-
-        attn_mask = None
-        if self._mode == "bias" and coords is not None:
-            attn_mask = self.pos_bias(coords, knn_indices)
-
-        total = B * N
-        chunk = 16384  # FlashAttention grid z-dim limit / n_head
-        if total <= chunk:
-            y = F.scaled_dot_product_attention(
-                q_flat, k_flat, v_flat, attn_mask=attn_mask,
-                dropout_p=self.dropout if self.training else 0,
+        if self.training:
+            y = checkpoint(
+                _sparse_sdpa,
+                q, k, v, knn_indices,
+                torch.tensor(self.n_head, device=q.device),
+                torch.tensor(knn, device=q.device),
+                use_reentrant=False,
             )
         else:
-            y_parts = []
-            for start in range(0, total, chunk):
-                end = min(start + chunk, total)
-                m = attn_mask[start:end] if attn_mask is not None else None
-                y_parts.append(F.scaled_dot_product_attention(
-                    q_flat[start:end], k_flat[start:end], v_flat[start:end],
-                    attn_mask=m,
-                    dropout_p=self.dropout if self.training else 0,
-                ))
-            y = torch.cat(y_parts, dim=0)
+            y = _sparse_sdpa(q, k, v, knn_indices, self.n_head, knn)
 
         y = y.view(B, N, self.n_head, -1).transpose(1, 2)
         y = y.transpose(1, 2).contiguous().view(B, N, D)
