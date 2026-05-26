@@ -1,6 +1,7 @@
 """Transformer class."""
 
 import logging
+from typing import Literal
 import math
 import torch
 import torch.nn as nn
