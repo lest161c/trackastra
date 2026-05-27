@@ -64,7 +64,7 @@ class AffineDistortion:
             (k, _transform_affine_feature(k, v, M))
             for k, v in features.items() if k != "pretrained_feats"
         )
-        return coords_t, feats_t
+        return coords_t, feats_t, labels
 
 
 class ElasticDistortion:
@@ -107,7 +107,7 @@ class ElasticDistortion:
                 feats_t[k] = v * noise
             else:
                 feats_t[k] = v.copy()
-        return coords_t, feats_t
+        return coords_t, feats_t, labels
 
 
 class JitterDistortion:
@@ -134,7 +134,7 @@ class JitterDistortion:
         feats_t = OrderedDict(
             (k, v.copy()) for k, v in features.items() if k != "pretrained_feats"
         )
-        return coords_t, feats_t
+        return coords_t, feats_t, labels
 
 
 class DropoutDistortion:
@@ -153,10 +153,11 @@ class DropoutDistortion:
         p_drop = self.rng.uniform(*self.p_drop_range)
         keep = self.rng.rand(n) > p_drop
         coords_t = coords[keep]
+        labels_t = labels[keep]
         feats_t = OrderedDict(
             (k, v[keep]) for k, v in features.items() if k != "pretrained_feats"
         )
-        return coords_t, feats_t
+        return coords_t, feats_t, labels_t
 
 
 class PhotometricDistortion:
@@ -178,7 +179,7 @@ class PhotometricDistortion:
                 feats_t[k] = v * scale + shift
             else:
                 feats_t[k] = v.copy()
-        return coords.copy(), feats_t
+        return coords.copy(), feats_t, labels
 
 
 class FeatureNoise:
@@ -204,7 +205,7 @@ class FeatureNoise:
             if feat_std > 1e-6:
                 noise = noise * (feat_std * 0.1)  # Scale noise to ~10% of feature std
             feats_t[k] = v + noise
-        return coords.copy(), feats_t
+        return coords.copy(), feats_t, labels
 
 
 class DistortionPipeline:
@@ -249,7 +250,12 @@ class DistortionPipeline:
         return cls(distortions, seed=config.get("seed"))
 
     def __call__(self, coords, features, labels):
-        """Generate two independent augmented views.
+        """Generate two independently augmented views.
+
+        All distortions are random except DropoutDistortion, which
+        uses shared RNG state across both views. This ensures cell
+        dropout is identical in both views, preserving label-sorted
+        positive-pair alignment in SSLDataset.
 
         Args:
             coords:   (N, ndim) — cell coordinates
@@ -257,19 +263,33 @@ class DistortionPipeline:
             labels:   (N,) — cell identity labels
 
         Returns:
-            coords1, feats1, labels1: view 1 (independently distorted)
-            coords2, feats2, labels2: view 2 (independently distorted)
+            coords1, feats1, labels1: view 1
+            coords2, feats2, labels2: view 2
         """
 
-        def _apply_view(coord, feat, lab):
+        def _apply_view(coord, feat, lab, dropout_states=None):
             c, f, l = coord.copy(), {k: v.copy() for k, v in feat.items()}, lab.copy()
-            for dist in self.distortions:
-                c, f = dist(c, f, l)
-                if isinstance(dist, DropoutDistortion):
-                    l = l[:len(c)]
+            if dropout_states is not None:
+                for dist in self.distortions:
+                    if isinstance(dist, DropoutDistortion):
+                        dist.rng.__setstate__(dropout_states[id(dist)])
+                    c, f, l = dist(c, f, l)
+            else:
+                for dist in self.distortions:
+                    c, f, l = dist(c, f, l)
             return c, f, l
 
+        # Collect dropout RNG states from first view
+        dropout_states = {}
+        for dist in self.distortions:
+            if isinstance(dist, DropoutDistortion):
+                dropout_states[id(dist)] = dist.rng.__getstate__()
+
         c1, f1, l1 = _apply_view(coords, features, labels)
+        # Restore same dropout pattern for second view
+        for dist in self.distortions:
+            if isinstance(dist, DropoutDistortion):
+                dist.rng.__setstate__(dropout_states[id(dist)])
         c2, f2, l2 = _apply_view(coords, features, labels)
 
         return c1, f1, l1, c2, f2, l2
