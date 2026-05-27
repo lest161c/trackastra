@@ -463,6 +463,50 @@ class TrackingTransformer(torch.nn.Module):
 
         return A
 
+    def encode(self, coords, features=None, padding_mask=None, knn_indices=None):
+        """Run encoder only, return per-cell embeddings (B,N,d_model)."""
+        assert coords.ndim == 3 and coords.shape[-1] in (3, 4)
+        _N = coords.shape[1]
+
+        if padding_mask is not None:
+            coords = coords.clone()
+            coords[padding_mask] = coords.max()
+
+        min_time = coords[:, :, :1].min(dim=1, keepdims=True).values
+        coords = coords - min_time
+
+        pos = self.pos_embed(coords)
+
+        if features is None or features.numel() == 0:
+            features = pos
+        else:
+            features = self.feat_embed(features)
+            features = torch.cat((pos, features), axis=-1)
+
+        features = self.proj(features)
+        features = self.norm(features)
+
+        x = features
+
+        knn = self.config.get("knn_neighbors", -1)
+        if knn > 0 and knn_indices is None and _N >= knn:
+            yx = coords[..., 1:]
+            B, N = yx.shape[:2]
+            knn_indices = torch.empty(B, N, knn, dtype=torch.long, device=coords.device)
+            for b in range(B):
+                yx_b = yx[b]
+                dist = torch.cdist(yx_b.float(), yx_b.float())
+                if padding_mask is not None:
+                    pm_b = padding_mask[b]
+                    dist.masked_fill_(pm_b.unsqueeze(1), float('inf'))
+                _, knn_indices[b] = torch.topk(dist, k=knn, dim=-1, largest=False)
+
+        for enc in self.encoder:
+            x = enc(x, coords=coords, padding_mask=padding_mask, knn_indices=knn_indices)
+
+        x = self.head_x(x)
+        return x
+
     def normalize_output(
         self,
         A: torch.FloatTensor,
