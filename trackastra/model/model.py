@@ -411,9 +411,9 @@ class TrackingTransformer(torch.nn.Module):
         _B, _N, _D = coords.shape
 
         # disable padded coords (such that it doesnt affect minimum)
-        if padding_mask is not None:
+        if padding_mask is not None and padding_mask.any():
             coords = coords.clone()
-            coords[padding_mask] = coords.max()
+            coords[padding_mask] = coords.amax(dim=(0, 1))
 
         # remove temporal offset
         min_time = coords[:, :, :1].min(dim=1, keepdims=True).values
@@ -473,9 +473,9 @@ class TrackingTransformer(torch.nn.Module):
         assert coords.ndim == 3 and coords.shape[-1] in (3, 4)
         _N = coords.shape[1]
 
-        if padding_mask is not None:
+        if padding_mask is not None and padding_mask.any():
             coords = coords.clone()
-            coords[padding_mask] = coords.max()
+            coords[padding_mask] = coords.amax(dim=(0, 1))
 
         min_time = coords[:, :, :1].min(dim=1, keepdims=True).values
         coords = coords - min_time
