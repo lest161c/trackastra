@@ -61,6 +61,27 @@ def embedding_consistency(z1, z2, pm1, pm2):
     return (z1_n * z2_n).sum(dim=-1)[valid].mean().item()
 
 
+def inter_cell_similarity(z1, pm1):
+    """Mean cosine similarity between DIFFERENT cells within view 1.
+    Low = discriminative, high = collapse."""
+    valid = ~pm1
+    total_sim = 0.0
+    n = 0
+    for b in range(z1.shape[0]):
+        v = valid[b]
+        nv = v.sum().item()
+        if nv < 2:
+            continue
+        z = F.normalize(z1[b][v], dim=-1)
+        sim = z @ z.T
+        mask = 1 - torch.eye(nv, device=sim.device)
+        total_sim += (sim * mask).sum().item() / (nv * (nv - 1))
+        n += 1
+    if n == 0:
+        return 0.0
+    return total_sim / n
+
+
 def scan_frames(data_root, conditions):
     """Scan for all single frames (mask + img pairs)."""
     frames = []
@@ -287,7 +308,12 @@ def train_ssl(cfg, model, device):
         tl, tc = np.mean(train_losses), np.mean(train_cons)
         vl, vc = np.mean(val_losses) if val_losses else 0, np.mean(val_cons) if val_cons else 0
 
-        logger.info(f"SSL Epoch {epoch:>3}: train_loss={tl:.4f} train_cons={tc:.4f} val_loss={vl:.4f} val_cons={vc:.4f} [{dt:.0f}s]")
+        # Log inter-cell similarity for one batch to detect collapse
+        test_batch = next(iter(val_loader))
+        with torch.no_grad():
+            zt = model.encode(test_batch["coords1"].to(device), features=test_batch["features1"].to(device), padding_mask=test_batch["pm1"].to(device))
+            ics = inter_cell_similarity(zt, test_batch["pm1"].to(device))
+        logger.info(f"SSL Epoch {epoch:>3}: train_loss={tl:.4f} train_cons={tc:.4f} val_loss={vl:.4f} val_cons={vc:.4f} inter_sim={ics:.4f} [{dt:.0f}s]")
 
         if vl < best_val:
             best_val = vl
