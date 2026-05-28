@@ -1,9 +1,17 @@
 """Distortion families for SSL contrastive learning.
 
+Reference: Han & Lu (2025), ASCENT §3.1 (Distortion pipeline).
+Distortion families: affine, elastic, jitter, dropout, photometric, feature_noise.
+
 Each distortion independently transforms a synthetic "view" of a single frame.
-For contrastive SSL: two independent augmented views are generated from each
+For contrastive SSL: two independently augmented views are generated from each
 original frame. The model learns to produce similar embeddings for the same
 cell across views while pushing apart embeddings of different cells.
+
+Key design: DropoutDistortion shares RNG state across both views (ASCENT §3.1:
+identity correspondence i → T(i) requires same cells present in both views).
+Without shared RNG, independent per-view dropout breaks label-sorted positive-pair
+alignment in the contrastive loss.
 
 Design principle: augmentations must be destructive enough to prevent
 the encoder from using trivial geometric shortcuts (coordinate memorization).

@@ -1,5 +1,22 @@
 """ASCENT-style contrastive SSL pretraining directly on Trackastra encoder.
 
+Reference:
+    Han & Lu (2025). ASCENT: Annotation-free Self-supervised Contrastive
+    Embeddings for 3D Neuron Tracking in Fluorescence Microscopy.
+
+Approach (ASCENT §3: Contrastive pretraining framework):
+    - ASCENT §3.1 (Distortion pipeline): Two augmented views from geometric
+      distortions of single-frame segmentations. Distortion families: affine,
+      elastic, jitter, dropout, photometric, feature noise.
+    - ASCENT §3.2 (Contrastive loss): NT-Xent / InfoNCE on per-cell embeddings.
+      Normalize embeddings to unit sphere, compute cosine similarity matrix
+      scaled by temperature, cross-entropy with positive pair = same cell
+      across views, negatives = all other cells in the frame.
+    - ASCENT §4: Pretrained encoder transferred to downstream tracking model.
+
+Our integration: SSL pretrains Trackastra's encoder (KNN or dense) directly,
+no separate CellEmbedder. After SSL, decoder starts random for downstream.
+
 Single frame + DistortionPipeline → two augmented views → encoder → NT-Xent.
 Trains encoder + feature projection only. Saves encoder weights for downstream.
 
@@ -28,7 +45,14 @@ logger = logging.getLogger("ssl_trainer")
 
 
 def nt_xent_loss(z1, z2, pm1, pm2, temperature=0.05):
-    """Per-frame NT-Xent (InfoNCE) contrastive loss."""
+    """Per-frame NT-Xent (InfoNCE) contrastive loss.
+
+    ASCENT §3.2: Normalize embeddings z1,z2 to unit sphere, concatenate
+    [z1, z2] → (2N, D), compute cosine similarity matrix / temperature τ.
+    Positive pairs: z1[i] ↔ z2[i] (same cell across views).
+    Negatives: all other 2N−2 embeddings in the frame.
+    Loss: cross-entropy with labels at offset N (standard SimCLR formulation).
+    """
     B, N_max, D = z1.shape
     z1 = F.normalize(z1, dim=-1)
     z2 = F.normalize(z2, dim=-1)
@@ -236,7 +260,8 @@ def train_ssl(cfg, model, device):
     n_val = max(1, int(len(all_frames) * val_split))
     val_frames, train_frames = all_frames[:n_val], all_frames[n_val:]
 
-    # Distortion pipeline
+    # Distortion pipeline (ASCENT §3.1: two independently augmented views
+    # from geometric/feature distortions of single-frame segmentations)
     dist_cfg = {
         "distortions": cfg.get("distortions", ["affine", "elastic", "jitter", "dropout", "photometric", "feature_noise"]),
         "affine": cfg.get("affine", {}),
@@ -276,6 +301,8 @@ def train_ssl(cfg, model, device):
             pm2 = batch["pm2"].to(device)
 
             opt.zero_grad()
+            # ASCENT §3.2: Run encoder only (no decoder) to produce
+            # per-cell embeddings, then compute contrastive loss.
             z1 = model.encode(c1, features=f1, padding_mask=pm1)
             z2 = model.encode(c2, features=f2, padding_mask=pm2)
             loss = nt_xent_loss(z1, z2, pm1, pm2, temperature)

@@ -464,7 +464,12 @@ class TrackingTransformer(torch.nn.Module):
         return A
 
     def encode(self, coords, features=None, padding_mask=None, knn_indices=None):
-        """Run encoder only, return per-cell embeddings (B,N,d_model)."""
+        """Run encoder only, return per-cell embeddings (B,N,d_model).
+
+        Used for ASCENT-style contrastive SSL pretraining (Han & Lu 2025 §3.2):
+        encoder output serves as per-cell embedding for NT-Xent loss.
+        Decoder is not used during SSL — only encoder + projection layers.
+        """
         assert coords.ndim == 3 and coords.shape[-1] in (3, 4)
         _N = coords.shape[1]
 
