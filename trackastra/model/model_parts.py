@@ -435,3 +435,123 @@ class GatherSparseAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(B, N, D)
         y = self.proj(y)
         return y
+
+
+class CachedDistAttention(nn.Module):
+    """Spatial-cutoff attention with pre-computed 2D pairwise distances.
+
+    Identical semantics to RelativePositionalAttention but avoids per-layer
+    cdist: the 2D distance matrix is computed once in TrackingTransformer.forward()
+    and shared across all L layers. 3D cdist for distance decay is still per-layer.
+    """
+
+    def __init__(
+        self,
+        coord_dim: int,
+        embed_dim: int,
+        n_head: int,
+        cutoff_spatial: float = 256,
+        cutoff_temporal: float = 16,
+        n_spatial: int = 32,
+        n_temporal: int = 16,
+        dropout: float = 0.0,
+        mode: Literal["bias", "rope", "none"] = "none",
+        attn_dist_mode: str = "v0",
+        knn_neighbors: int = -1,
+    ):
+        super().__init__()
+        assert embed_dim % n_head == 0
+        self.q_pro = nn.Linear(embed_dim, embed_dim, bias=True)
+        self.k_pro = nn.Linear(embed_dim, embed_dim, bias=True)
+        self.v_pro = nn.Linear(embed_dim, embed_dim, bias=True)
+        self.proj = nn.Linear(embed_dim, embed_dim)
+        self.n_head = n_head
+        self.embed_dim = embed_dim
+        self.dropout = dropout
+        self.cutoff_spatial = cutoff_spatial
+        self.attn_dist_mode = attn_dist_mode
+        self._mode = mode
+
+        if mode == "bias":
+            self.pos_bias = RelativePositionalBias(
+                n_head=n_head,
+                cutoff_spatial=cutoff_spatial,
+                cutoff_temporal=cutoff_temporal,
+                n_spatial=n_spatial,
+                n_temporal=n_temporal,
+            )
+        elif mode == "rope":
+            from .rope import RotaryPositionalEncoding
+            n_split = 2 * (embed_dim // (2 * (coord_dim + 1) * n_head))
+            self.rot_pos_enc = RotaryPositionalEncoding(
+                cutoffs=((cutoff_temporal,) + (cutoff_spatial,) * coord_dim),
+                n_pos=(embed_dim // n_head - coord_dim * n_split,)
+                + (n_split,) * coord_dim,
+            )
+        elif mode == "none":
+            pass
+        else:
+            raise ValueError(f"Unknown mode {mode}")
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        coords: torch.Tensor = None,
+        padding_mask: torch.Tensor = None,
+        knn_indices: torch.Tensor = None,
+        dist_2d: torch.Tensor = None,
+    ):
+        B, N, D = query.shape
+        if N == 0:
+            return torch.zeros(B, 0, D, device=query.device, dtype=query.dtype)
+        nH = self.n_head
+        Dh = D // nH
+        attn_ignore_val = -1e3
+
+        q = self.q_pro(query).view(B, N, nH, Dh).transpose(1, 2)
+        k = self.k_pro(key).view(B, N, nH, Dh).transpose(1, 2)
+        v = self.v_pro(value).view(B, N, nH, Dh).transpose(1, 2)
+
+        if coords is not None and self._mode == "rope":
+            q, k = self.rot_pos_enc(q, k, coords)
+
+        # Spatial cutoff from pre-computed 2D distances (or compute if not cached)
+        if dist_2d is not None:
+            spatial_mask = (dist_2d > self.cutoff_spatial).unsqueeze(1).expand(-1, nH, -1, -1)
+        else:
+            yx = coords[..., 1:]
+            spatial_dist = torch.cdist(yx, yx)
+            spatial_mask = (spatial_dist > self.cutoff_spatial).unsqueeze(1)
+
+        # Build mask: -inf for cells outside cutoff, 0 otherwise
+        mask = torch.zeros(B, nH, N, N, device=q.device, dtype=q.dtype)
+        mask.masked_fill_(spatial_mask, attn_ignore_val)
+
+        # Positional bias
+        if coords is not None and self._mode == "bias":
+            mask = mask + self.pos_bias(coords)
+
+        # Distance decay (v0 uses 3D cdist, v1 uses spatial_dist)
+        if coords is not None:
+            if self.attn_dist_mode == "v0":
+                dist_3d = torch.cdist(coords, coords, p=2)
+                mask = mask + torch.exp(-0.1 * dist_3d.unsqueeze(1))
+            elif self.attn_dist_mode == "v1" and dist_2d is not None:
+                mask = mask + torch.exp(-5 * dist_2d.unsqueeze(1) / self.cutoff_spatial)
+
+        if padding_mask is not None:
+            ignore_mask = torch.logical_or(
+                padding_mask.unsqueeze(1), padding_mask.unsqueeze(2)
+            ).unsqueeze(1)
+            mask.masked_fill_(ignore_mask, attn_ignore_val)
+
+        y = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=mask,
+            dropout_p=self.dropout if self.training else 0,
+        )
+
+        y = y.transpose(1, 2).contiguous().view(B, N, D)
+        y = self.proj(y)
+        return y
