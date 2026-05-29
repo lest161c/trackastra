@@ -473,6 +473,9 @@ class TrackingTransformer(torch.nn.Module):
         assert coords.ndim == 3 and coords.shape[-1] in (3, 4)
         _N = coords.shape[1]
 
+        if _N == 0:
+            return torch.zeros(coords.shape[0], 0, self.config["d_model"], device=coords.device)
+
         if padding_mask is not None and padding_mask.any():
             coords = coords.clone()
             coords[padding_mask] = coords.amax(dim=(0, 1))
