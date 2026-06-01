@@ -240,7 +240,7 @@ class CTCData(Dataset):
                 f" windows from {self.root} ({default_timer() - start:.1f}s)\n"
             )
         else:
-            self.n_objects = 0
+            self.n_objects = ()
             logger.warning(f"Could not load any tracks from {self.root}")
 
         if self.compress:
@@ -251,43 +251,9 @@ class CTCData(Dataset):
     @classmethod
     def from_arrays(cls, imgs: np.ndarray, masks: np.ndarray, train_args: dict):
         self = cls(**train_args)
-        # for key, value in train_args.items():
-        #     setattr(self, key, value)
 
-        # self.use_gt = use_gt
-        # self.slice_pct = slice_pct
-        # if not 0 <= slice_pct[0] < slice_pct[1] <= 1:
-        # raise ValueError(f"Invalid slice_pct {slice_pct}")
-        # self.downscale_spatial = downscale_spatial
-        # self.downscale_temporal = downscale_temporal
-        # self.detection_folders = detection_folders
-        # self.ndim = ndim
-        # self.features = features
-
-        # if features not in ("none", "wrfeat") and features not in _PROPERTIES[ndim]:
-        # raise ValueError(
-        # f"'{features}' not one of the supported {ndim}D features {tuple(_PROPERTIES[ndim].keys())}"
-        # )
-
-        # logger.info(f"ROOT (config): {self.root}")
-        # self.root, self.gt_tra_folder = self._guess_root_and_gt_tra_folder(self.root)
-        # logger.info(f"ROOT: \t{self.root}")
-        # logger.info(f"GT TRA:\t{self.gt_tra_folder}")
-        # if self.use_gt:
-        # self.gt_mask_folder = self._guess_mask_folder(self.root, self.gt_tra_folder)
-        # else:
-        # logger.info("Using dummy masks as GT")
-        # self.gt_mask_folder = self._guess_det_folder(
-        # self.root, self.detection_folders[0]
-        # )
-        # logger.info(f"GT MASK:\t{self.gt_mask_folder}")
-
-        # dont load image data if not needed
-        # if features in ("none",):
-        # self.img_folder = None
-        # else:
-        # self.img_folder = self._guess_img_folder(self.root)
-        # logger.info(f"IMG:\t\t{self.img_folder}")
+        self.root = "Unset root (from_arrays)"
+        self.ndim = 3 if masks.ndim == 3 else 2
 
         self.feat_dim, self.augmenter, self.cropper = self._setup_features_augs(
             self.ndim, self.features, self.augment, self.crop_size
@@ -310,7 +276,7 @@ class CTCData(Dataset):
                 f" windows from {self.root} ({default_timer() - start:.1f}s)\n"
             )
         else:
-            self.n_objects = 0
+            self.n_objects = ()
             logger.warning(f"Could not load any tracks from {self.root}")
 
         if self.compress:

@@ -118,7 +118,9 @@ class BalancedBatchSampler(BatchSampler):
         logger.debug(f"{weight_by_dataset=}")
 
     def get_probs(self, idx):
-        idx = np.array(idx)
+        idx = np.array(idx, dtype=int)
+        if len(idx) == 0:
+            return np.ones(0)
         if self.weight_by_ndivs:
             probs = 1 + np.sqrt(self.n_divs[idx])
         else:
@@ -130,7 +132,9 @@ class BalancedBatchSampler(BatchSampler):
         return probs
 
     def sample_batches(self, idx: Iterable[int]):
-        # we will split the indices into pools of size n_pool
+        idx = list(idx)
+        if len(idx) == 0:
+            return []
         num_samples = self.num_samples if self.num_samples is not None else len(idx)
         # sample from the indices with replacement and given probabilites
         idx = np.random.choice(idx, num_samples, replace=True, p=self.get_probs(idx))
@@ -200,6 +204,8 @@ class BalancedDistributedSampler(DistributedSampler):
 
     def __iter__(self):
         indices = list(super().__iter__())
+        if len(indices) == 0:
+            return
         batches = self._balanced_batch_sampler.sample_batches(indices)
         for batch in batches:
             yield from batch
@@ -244,7 +250,8 @@ class BalancedDataModule(LightningDataModule):
                 CTCData(
                     root=Path(inp),
                     augment=self.augment if split == "train" else 0,
-                    **self.dataset_kwargs,
+                    slice_pct=self.dataset_kwargs.get("slice_pct", (0.0, 1.0)) if split == "train" else (0.0, 1.0),
+                    **{k: v for k, v in self.dataset_kwargs.items() if k != "slice_pct"}
                 )
                 for inp in inps
             )
@@ -268,7 +275,8 @@ class BalancedDataModule(LightningDataModule):
                 CTCData(
                     root=Path(inp),
                     augment=self.augment if split == "train" else 0,
-                    **self.dataset_kwargs,
+                    slice_pct=self.dataset_kwargs.get("slice_pct", (0.0, 1.0)) if split == "train" else (0.0, 1.0),
+                    **{k: v for k, v in self.dataset_kwargs.items() if k != "slice_pct"}
                 )
                 for inp in inps
             )

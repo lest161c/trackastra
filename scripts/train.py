@@ -329,9 +329,9 @@ class WrappedLightningModule(pl.LightningModule):
             "train_loss",
             loss,
             prog_bar=True,
-            on_step=False,
+            on_step=True,
             on_epoch=True,
-            sync_dist=True,
+            sync_dist=False,
         )
 
         # self.train_loss.append(loss)
@@ -371,9 +371,9 @@ class WrappedLightningModule(pl.LightningModule):
             "val_loss",
             loss,
             prog_bar=True,
-            on_step=False,
+            on_step=True,
             on_epoch=True,
-            sync_dist=True,
+            sync_dist=False,
         )
 
         # self.val_loss.append(loss)
@@ -775,7 +775,6 @@ def train(args):
             attn_positional_bias_n_spatial=args.attn_positional_bias_n_spatial,
             attn_dist_mode=args.attn_dist_mode,
             causal_norm=args.causal_norm,
-            knn_neighbors=args.knn_neighbors,
         )
 
         dummy_model_lightning = WrappedLightningModule(
@@ -824,6 +823,7 @@ def train(args):
         crop_size=args.crop_size,
         compress=args.compress,
         use_gt=args.use_gt,
+        slice_pct=(0.0, args.train_fraction),
     )
     sampler_kwargs = dict(
         batch_size=args.batch_size,
@@ -886,6 +886,7 @@ def train(args):
             patience=args.epochs // 6,
             mode="min",
             verbose=True,
+            check_on_train_epoch_end=False,
         )
     )
 
@@ -925,7 +926,6 @@ def train(args):
             attn_positional_bias_n_spatial=args.attn_positional_bias_n_spatial,
             attn_dist_mode=args.attn_dist_mode,
             causal_norm=args.causal_norm,
-            knn_neighbors=args.knn_neighbors,
         )
 
     model_lightning = WrappedLightningModule(
@@ -1117,6 +1117,7 @@ def parse_train_args():
         ),
     )
     parser.add_argument("--input_train", type=str, nargs="+")
+    parser.add_argument("--train_fraction", type=float, default=1.0, help="Fraction of training data to use (e.g. 0.1 for 10%%)")
     parser.add_argument("--input_val", type=str, nargs="*")
     parser.add_argument("--downscale_temporal", type=int, default=1)
     parser.add_argument("--downscale_spatial", type=int, default=1)
