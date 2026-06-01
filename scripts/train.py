@@ -329,9 +329,9 @@ class WrappedLightningModule(pl.LightningModule):
             "train_loss",
             loss,
             prog_bar=True,
-            on_step=True,
+            on_step=False,
             on_epoch=True,
-            sync_dist=False,
+            sync_dist=True,
         )
 
         # self.train_loss.append(loss)
@@ -371,9 +371,9 @@ class WrappedLightningModule(pl.LightningModule):
             "val_loss",
             loss,
             prog_bar=True,
-            on_step=True,
+            on_step=False,
             on_epoch=True,
-            sync_dist=False,
+            sync_dist=True,
         )
 
         # self.val_loss.append(loss)
@@ -619,6 +619,8 @@ class MyModelCheckpoint(pl.pytorch.callbacks.Callback):
 
     def on_validation_end(self, trainer, pl_module):
         if trainer.is_global_zero and not trainer.sanity_checking:
+            if self._monitor not in trainer.logged_metrics:
+                return
             value = trainer.logged_metrics[self._monitor]
             if value < self._best:
                 self._best = value
