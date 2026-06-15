@@ -19,6 +19,7 @@ from .model_parts import (
     CachedDistAttention,
     PositionalEncoding,
 )
+from .dino_encoder import DINOProjection
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +303,7 @@ class TrackingTransformer(torch.nn.Module):
             "none", "linear", "softmax", "quiet_softmax"
         ] = "quiet_softmax",
         attn_dist_mode: str = "v0",
+        use_dino: bool = False,
     ):
         super().__init__()
 
@@ -321,11 +323,16 @@ class TrackingTransformer(torch.nn.Module):
             feat_embed_per_dim=feat_embed_per_dim,
             causal_norm=causal_norm,
             attn_dist_mode=attn_dist_mode,
+            use_dino=use_dino,
         )
 
         self.proj = nn.Linear(
             (1 + coord_dim) * pos_embed_per_dim + feat_dim * feat_embed_per_dim, d_model
         )
+        if use_dino:
+            self.dino_proj = DINOProjection(d_model=d_model)
+            pos_embed_dim = (1 + coord_dim) * pos_embed_per_dim
+            self.dino_pos_proj = nn.Linear(pos_embed_dim, d_model)
         self.norm = nn.LayerNorm(d_model)
 
         attn_factory = lambda: CachedDistAttention(
@@ -389,29 +396,36 @@ class TrackingTransformer(torch.nn.Module):
 
         # self.pos_embed = NoPositionalEncoding(d=pos_embed_per_dim * (1 + coord_dim))
 
-    def forward(self, coords, features=None, padding_mask=None, knn_indices=None):
-        assert coords.ndim == 3 and coords.shape[-1] in (3, 4)
-        _B, _N, _D = coords.shape
-
-        # disable padded coords (such that it doesnt affect minimum)
+    def _embed(self, coords, features, padding_mask, patches=None):
+        """Shared embedding logic for forward() and encode()."""
         if padding_mask is not None and padding_mask.any():
             coords = coords.clone()
             coords[padding_mask] = coords.amax(dim=(0, 1))
 
-        # remove temporal offset
         min_time = coords[:, :, :1].min(dim=1, keepdims=True).values
         coords = coords - min_time
-
         pos = self.pos_embed(coords)
 
-        if features is None or features.numel() == 0:
+        if patches is not None and self.config.get("use_dino", False):
+            dino_feats = self.dino_proj(patches)
+            pos_proj = self.dino_pos_proj(pos)
+            features = pos_proj + dino_feats
+            features = self.norm(features)
+        elif features is None or features.numel() == 0:
             features = pos
         else:
             features = self.feat_embed(features)
             features = torch.cat((pos, features), axis=-1)
+            features = self.proj(features)
+            features = self.norm(features)
 
-        features = self.proj(features)
-        features = self.norm(features)
+        return features, coords
+
+    def forward(self, coords, features=None, padding_mask=None, knn_indices=None, patches=None):
+        assert coords.ndim == 3 and coords.shape[-1] in (3, 4)
+        _B, _N, _D = coords.shape
+
+        features, coords = self._embed(coords, features, padding_mask, patches)
 
         x = features
 
@@ -434,7 +448,7 @@ class TrackingTransformer(torch.nn.Module):
 
         return A
 
-    def encode(self, coords, features=None, padding_mask=None, knn_indices=None):
+    def encode(self, coords, features=None, padding_mask=None, knn_indices=None, patches=None):
         """Run encoder only, return per-cell embeddings (B,N,d_model).
 
         Used for ASCENT-style contrastive SSL pretraining (Han & Lu 2025 §3.2):
@@ -447,23 +461,7 @@ class TrackingTransformer(torch.nn.Module):
         if _N == 0:
             return torch.zeros(coords.shape[0], 0, self.config["d_model"], device=coords.device)
 
-        if padding_mask is not None and padding_mask.any():
-            coords = coords.clone()
-            coords[padding_mask] = coords.amax(dim=(0, 1))
-
-        min_time = coords[:, :, :1].min(dim=1, keepdims=True).values
-        coords = coords - min_time
-
-        pos = self.pos_embed(coords)
-
-        if features is None or features.numel() == 0:
-            features = pos
-        else:
-            features = self.feat_embed(features)
-            features = torch.cat((pos, features), axis=-1)
-
-        features = self.proj(features)
-        features = self.norm(features)
+        features, coords = self._embed(coords, features, padding_mask, patches)
 
         x = features
 
