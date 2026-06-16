@@ -17,6 +17,7 @@ from trackastra.utils import blockwise_causal_norm
 from .model_parts import (
     FeedForward,
     CachedDistAttention,
+    GatherSparseAttention,
     PositionalEncoding,
 )
 from .dino_encoder import DINOProjection
@@ -306,6 +307,7 @@ class TrackingTransformer(torch.nn.Module):
         ] = "quiet_softmax",
         attn_dist_mode: str = "v0",
         use_dino: bool = False,
+        knn_neighbors: int = -1,
     ):
         super().__init__()
 
@@ -326,6 +328,7 @@ class TrackingTransformer(torch.nn.Module):
             causal_norm=causal_norm,
             attn_dist_mode=attn_dist_mode,
             use_dino=use_dino,
+            knn_neighbors=knn_neighbors,
         )
 
         self.proj = nn.Linear(
@@ -337,16 +340,29 @@ class TrackingTransformer(torch.nn.Module):
             self.dino_pos_proj = nn.Linear(pos_embed_dim, d_model)
         self.norm = nn.LayerNorm(d_model)
 
-        attn_factory = lambda: CachedDistAttention(
-            coord_dim,
-            d_model,
-            nhead,
-            cutoff_spatial=spatial_pos_cutoff,
-            cutoff_temporal=window,
-            dropout=dropout,
-            mode=attn_positional_bias,
-            attn_dist_mode=attn_dist_mode,
-        )
+        if knn_neighbors > 0:
+            attn_factory = lambda: GatherSparseAttention(
+                coord_dim,
+                d_model,
+                nhead,
+                cutoff_spatial=spatial_pos_cutoff,
+                cutoff_temporal=window,
+                dropout=dropout,
+                mode=attn_positional_bias,
+                attn_dist_mode=attn_dist_mode,
+                knn_neighbors=knn_neighbors,
+            )
+        else:
+            attn_factory = lambda: CachedDistAttention(
+                coord_dim,
+                d_model,
+                nhead,
+                cutoff_spatial=spatial_pos_cutoff,
+                cutoff_temporal=window,
+                dropout=dropout,
+                mode=attn_positional_bias,
+                attn_dist_mode=attn_dist_mode,
+            )
 
         self.encoder = nn.ModuleList([
             EncoderLayer(
@@ -431,6 +447,12 @@ class TrackingTransformer(torch.nn.Module):
 
         x = features
 
+        knn = self.config.get("knn_neighbors", -1)
+        if knn > 0 and knn_indices is None and coords is not None:
+            yx = coords[..., 1:].float()
+            dist = torch.cdist(yx, yx)
+            knn_indices = dist.topk(knn + 1, dim=-1, largest=False)[1][..., 1:]
+
         dist_2d = torch.cdist(coords[..., 1:].float(), coords[..., 1:].float())
 
         for enc in self.encoder:
@@ -465,6 +487,12 @@ class TrackingTransformer(torch.nn.Module):
         features, coords = self._embed(coords, features, padding_mask, patches)
 
         x = features
+
+        knn = self.config.get("knn_neighbors", -1)
+        if knn > 0 and knn_indices is None and coords is not None:
+            yx = coords[..., 1:].float()
+            dist = torch.cdist(yx, yx)
+            knn_indices = dist.topk(knn + 1, dim=-1, largest=False)[1][..., 1:]
 
         dist_2d = torch.cdist(coords[..., 1:].float(), coords[..., 1:].float())
 

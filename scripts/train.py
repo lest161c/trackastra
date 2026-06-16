@@ -926,6 +926,7 @@ def train(args):
             attn_positional_bias_n_spatial=args.attn_positional_bias_n_spatial,
             attn_dist_mode=args.attn_dist_mode,
             causal_norm=args.causal_norm,
+            knn_neighbors=args.knn_neighbors,
         )
 
     model_lightning = WrappedLightningModule(
