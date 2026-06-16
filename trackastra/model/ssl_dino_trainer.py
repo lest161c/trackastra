@@ -434,13 +434,12 @@ if __name__ == "__main__":
         pos_embed_per_dim=args.pos_embed_per_dim,
         feat_embed_per_dim=args.feat_embed_per_dim,
         window=args.window,
-        knn_neighbors=args.knn_neighbors,
         use_dino=True,
     ).to(device)
 
     logger.info(
         f"Model: {sum(p.numel() for p in model.parameters()):,} params, "
-        f"K={args.knn_neighbors}, use_dino=True"
+        f"use_dino=True"
     )
 
     train_ssl(cfg, model, device)
