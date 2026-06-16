@@ -231,9 +231,9 @@ def collate_ssl_dino(batch):
 
 def train_ssl(cfg, model, device):
     ssl_cfg = cfg["ssl"]
-    epochs = ssl_cfg["epochs"]
-    lr = ssl_cfg["lr"]
-    temperature = ssl_cfg.get("temperature", 0.05)
+    epochs = int(ssl_cfg["epochs"])
+    lr = float(ssl_cfg["lr"])
+    temperature = float(ssl_cfg.get("temperature", 0.05))
     batch_size = ssl_cfg["batch_size"]
     val_split = ssl_cfg.get("val_split", 0.1)
 
