@@ -89,12 +89,14 @@ class DINOBackbone(nn.Module):
         """Extract DINOv2 CLS token embeddings.
 
         Args:
-            x: (N, 3, 224, 224) float32, ImageNet-normalized.
+            x: (N, 3, 224, 224) float32, ImageNet-normalized on any device.
 
         Returns:
-            (N, 384) float32 embeddings.
+            (N, 384) float32 embeddings on the same device as input.
         """
         model = self.load()
+        if next(model.parameters()).device != x.device:
+            model = model.to(x.device)
         return model(x)
 
 
