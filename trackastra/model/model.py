@@ -77,6 +77,7 @@ class EncoderLayer(nn.Module):
             coords=coords if self.positional_bias else None,
             padding_mask=padding_mask,
             dist_2d=dist_2d,
+            knn_indices=knn_indices,
         )
 
         x = x + a
@@ -142,6 +143,7 @@ class DecoderLayer(nn.Module):
             coords=coords if self.positional_bias else None,
             padding_mask=padding_mask,
             dist_2d=dist_2d,
+            knn_indices=knn_indices,
         )
 
         x = x + a
@@ -432,13 +434,12 @@ class TrackingTransformer(torch.nn.Module):
         dist_2d = torch.cdist(coords[..., 1:].float(), coords[..., 1:].float())
 
         for enc in self.encoder:
-            x = enc(x, coords=coords, padding_mask=padding_mask, dist_2d=dist_2d)
+            x = enc(x, coords=coords, padding_mask=padding_mask, dist_2d=dist_2d, knn_indices=knn_indices)
 
         y = features
         # decoder w cross attention
         for dec in self.decoder:
-            y = dec(y, x, coords=coords, padding_mask=padding_mask, dist_2d=dist_2d)
-            # y = dec(y, y, coords=coords, padding_mask=padding_mask)
+            y = dec(y, x, coords=coords, padding_mask=padding_mask, dist_2d=dist_2d, knn_indices=knn_indices)
 
         x = self.head_x(x)
         y = self.head_y(y)
@@ -468,7 +469,7 @@ class TrackingTransformer(torch.nn.Module):
         dist_2d = torch.cdist(coords[..., 1:].float(), coords[..., 1:].float())
 
         for enc in self.encoder:
-            x = enc(x, coords=coords, padding_mask=padding_mask, dist_2d=dist_2d)
+            x = enc(x, coords=coords, padding_mask=padding_mask, dist_2d=dist_2d, knn_indices=knn_indices)
 
         x = self.head_x(x)
         return x
@@ -549,8 +550,13 @@ class TrackingTransformer(torch.nn.Module):
         cls, folder, map_location=None, args=None, checkpoint_path: str = "model.pt"
     ):
         folder = Path(folder)
-
-        config = yaml.load(open(folder / "config.yaml"), Loader=yaml.FullLoader)
+        config_path = folder / "config.yaml"
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Config not found at {config_path}. Cannot load model from '{folder}'. "
+                "Ensure the path is a valid model directory containing config.yaml and model.pt."
+            )
+        config = yaml.load(open(config_path), Loader=yaml.FullLoader)
         if args:
             args = vars(args)
             for k, v in config.items():

@@ -296,6 +296,9 @@ def _sparse_sdpa(q, k, v, knn_indices, n_head, knn, dropout=0.0):
     n_head = int(n_head.item()) if isinstance(n_head, torch.Tensor) else n_head
     drop_p = dropout.item() if isinstance(dropout, torch.Tensor) else dropout
 
+    if knn < 1 or N < 1:
+        return torch.zeros(B, n_head, N, d_head, device=q.device, dtype=q.dtype)
+
     B_idx = torch.arange(B, device=q.device).view(B, 1, 1, 1)
     H_idx = torch.arange(n_head, device=q.device).view(1, n_head, 1, 1)
     idx = knn_indices.unsqueeze(1).expand(B, n_head, N, knn)
@@ -308,6 +311,15 @@ def _sparse_sdpa(q, k, v, knn_indices, n_head, knn, dropout=0.0):
     del k_sel
     v_flat = v_sel.transpose(1, 2).contiguous().view(B * N, n_head, knn, -1)
     del v_sel
+
+    # SDPA with very small K can trigger CUDA invalid config argument on some GPUs;
+    # use explicit matmul fallback for K < 8
+    if knn < 8:
+        scale = d_head ** -0.5
+        attn = q_flat @ k_flat.transpose(-2, -1) * scale
+        attn = torch.softmax(attn, dim=-1)
+        y = attn @ v_flat
+        return y
 
     total = B * N
     chunk = 16384
@@ -390,6 +402,7 @@ class GatherSparseAttention(nn.Module):
         coords: torch.Tensor = None,
         padding_mask: torch.Tensor = None,
         knn_indices: torch.Tensor = None,
+        **kwargs,
     ):
         B, N, D = query.shape
         if N == 0:

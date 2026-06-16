@@ -249,8 +249,9 @@ class WrappedLightningModule(pl.LightningModule):
                             timepoints=timepoints.detach().cpu().numpy(),
                         )
 
-                # Keep the non-softmaxed loss for numerical stability
-                loss = 0.01 * loss + self.criterion_softmax(A_pred_soft, A)
+                # Keep the non-softmaxed loss for numerical stability;
+                # clamp to [0,1] to prevent BCELoss CUDA assertion on fp16 overflow
+                loss = 0.01 * loss + self.criterion_softmax(A_pred_soft.clamp(0, 1), A)
 
         # Reweighting does not need gradients
         with torch.no_grad():
@@ -494,21 +495,15 @@ class WrappedLightningModule(pl.LightningModule):
                         )
 
             elif isinstance(self.logger, WandbLogger):
-                pass
-                # wandb.log(
-                #     {
-                #         "images/assoc_matrix": wandb.Image(
-                #             np.moveaxis(over.detach().cpu().numpy(), 0, -1), mode="RGB"
-                #         ),
-                #         "images/loss": wandb.Image(
-                #             loss_before_reduce.unsqueeze(2).detach().cpu().numpy()
-                #         ),
-                #         "images/loss_mask": wandb.Image(
-                #             out["mask"][sample].unsqueeze(2).detach().cpu().numpy()
-                #         ),
-                #     },
-                #     step=self.current_epoch,
-                # )
+                self.logger.log_image("assoc_matrix", [wandb.Image(
+                    np.moveaxis(over.detach().cpu().numpy(), 0, -1), mode="RGB"
+                )])
+                self.logger.log_image("loss", [wandb.Image(
+                    loss_before_reduce.unsqueeze(2).detach().cpu().numpy()
+                )])
+                self.logger.log_image("loss_mask", [wandb.Image(
+                    out["mask"][sample].unsqueeze(2).detach().cpu().numpy()
+                )])
             elif self.logger is None:
                 pass
             else:
@@ -678,7 +673,10 @@ def find_val_batch(loader_val, n_gpus):
 
 @rank_zero_only
 def _init_wandb(project, name, config):
-    _ = wandb.init(project=project, name=name, config=config)
+    if wandb.run is None:
+        wandb.init(project=project, name=name, config=config)
+    else:
+        wandb.config.update(config)
 
 
 def train(args):
@@ -997,6 +995,8 @@ def train(args):
                     torch.nn.utils.clip_grad_norm_(model_lightning.parameters(), 1.0)
                     ssl_opt.step(); losses.append(out["loss"].item())
                 logger.info(f"  SSL Epoch {epoch}: loss={np.mean(losses):.4f} [{default_timer()-t0:.0f}s]")
+                if isinstance(train_logger, WandbLogger):
+                    train_logger.log_metrics({"ssl_loss": np.mean(losses), "ssl_epoch": epoch})
             model.save(logdir / "ssl_pretrained")
             logger.info(f"SSL model saved to {ssl_path}")
         if args.ssl_only:
