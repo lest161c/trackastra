@@ -14,6 +14,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from timeit import default_timer
 
+from collections import OrderedDict
+
 import configargparse
 import git
 import lightning as pl
@@ -929,6 +931,20 @@ def train(args):
             knn_neighbors=args.knn_neighbors,
         )
 
+    if args.init_encoder is not None:
+        ckpt = torch.load(Path(args.init_encoder) / "model.pt", map_location="cpu", weights_only=True)
+        encoder_state = OrderedDict(
+            (k, v) for k, v in (ckpt.get("state_dict", ckpt).items())
+            if k.startswith("encoder.") or k.startswith("model.encoder.")
+        )
+        encoder_state = OrderedDict(
+            (k[6:] if k.startswith("model.") else k, v) for k, v in encoder_state.items()
+        )
+        missing, unexpected = model.load_state_dict(encoder_state, strict=False)
+        logging.info(f"Loaded encoder from {args.init_encoder}: {len(encoder_state)} keys")
+        if missing:
+            logging.info(f"Missing keys (random init): {[k for k in missing if not k.startswith('decoder')][:10]}...")
+
     model_lightning = WrappedLightningModule(
         model=model,
         warmup_epochs=args.warmup_epochs,
@@ -1081,6 +1097,10 @@ def parse_train_args():
         type=str,
         default=None,
         help="load this model at start (e.g. to continue training)",
+    )
+    parser.add_argument(
+        "--init_encoder", type=str, default=None,
+        help="Path to SSL checkpoint folder. Loads only encoder state_dict into a freshly constructed model."
     )
     parser.add_argument(
         "--div_upweight", type=float, default=2
