@@ -20,6 +20,7 @@ from .model_parts import (
     GatherSparseAttention,
     PositionalEncoding,
 )
+from .cnn_encoder import ScaledCNN, load_cnn_checkpoint
 from .dino_encoder import DINOProjection
 
 logger = logging.getLogger(__name__)
@@ -307,6 +308,8 @@ class TrackingTransformer(torch.nn.Module):
         ] = "quiet_softmax",
         attn_dist_mode: str = "v0",
         use_dino: bool = False,
+        use_cnn: bool = False,
+        cnn_checkpoint: str | None = None,
         knn_neighbors: int = -1,
     ):
         super().__init__()
@@ -328,6 +331,8 @@ class TrackingTransformer(torch.nn.Module):
             causal_norm=causal_norm,
             attn_dist_mode=attn_dist_mode,
             use_dino=use_dino,
+            use_cnn=use_cnn,
+            cnn_checkpoint=cnn_checkpoint,
             knn_neighbors=knn_neighbors,
         )
 
@@ -338,6 +343,16 @@ class TrackingTransformer(torch.nn.Module):
             self.dino_proj = DINOProjection(d_model=d_model)
             pos_embed_dim = (1 + coord_dim) * pos_embed_per_dim
             self.dino_pos_proj = nn.Linear(pos_embed_dim, d_model)
+        if use_cnn:
+            self.cnn_proj = nn.Linear(128, d_model)
+            if cnn_checkpoint is not None:
+                self.cnn_encoder = load_cnn_checkpoint(cnn_checkpoint, scale='large')
+            else:
+                self.cnn_encoder = ScaledCNN(scale='large', out_dim=128)
+                self.cnn_encoder.eval()
+                for p in self.cnn_encoder.parameters():
+                    p.requires_grad = False
+                logger.info("Created untrained frozen ScaledCNN (no checkpoint)")
         self.norm = nn.LayerNorm(d_model)
 
         if knn_neighbors > 0:
@@ -414,7 +429,7 @@ class TrackingTransformer(torch.nn.Module):
 
         # self.pos_embed = NoPositionalEncoding(d=pos_embed_per_dim * (1 + coord_dim))
 
-    def _embed(self, coords, features, padding_mask, patches=None):
+    def _embed(self, coords, features, padding_mask, patches=None, patches_cnn=None):
         """Shared embedding logic for forward() and encode()."""
         if padding_mask is not None and padding_mask.any():
             coords = coords.clone()
@@ -437,13 +452,22 @@ class TrackingTransformer(torch.nn.Module):
             features = self.proj(features)
             features = self.norm(features)
 
+        # CNN residual feature injection (additive, after norm)
+        if patches_cnn is not None and self.config.get("use_cnn", False):
+            B, N = patches_cnn.shape[:2]
+            cnn_in = patches_cnn.reshape(B * N, 1, 64, 64)
+            with torch.no_grad():
+                cnn_out = self.cnn_encoder(cnn_in)  # (B*N, 128)
+            cnn_out = cnn_out.reshape(B, N, -1)      # (B, N, 128)
+            features = features + self.cnn_proj(cnn_out)
+
         return features, coords
 
-    def forward(self, coords, features=None, padding_mask=None, knn_indices=None, patches=None):
+    def forward(self, coords, features=None, padding_mask=None, knn_indices=None, patches=None, patches_cnn=None):
         assert coords.ndim == 3 and coords.shape[-1] in (3, 4)
         _B, _N, _D = coords.shape
 
-        features, coords = self._embed(coords, features, padding_mask, patches)
+        features, coords = self._embed(coords, features, padding_mask, patches, patches_cnn)
 
         x = features
 
@@ -471,7 +495,7 @@ class TrackingTransformer(torch.nn.Module):
 
         return A
 
-    def encode(self, coords, features=None, padding_mask=None, knn_indices=None, patches=None):
+    def encode(self, coords, features=None, padding_mask=None, knn_indices=None, patches=None, patches_cnn=None):
         """Run encoder only, return per-cell embeddings (B,N,d_model).
 
         Used for ASCENT-style contrastive SSL pretraining (Han & Lu 2025 §3.2):
@@ -484,7 +508,7 @@ class TrackingTransformer(torch.nn.Module):
         if _N == 0:
             return torch.zeros(coords.shape[0], 0, self.config["d_model"], device=coords.device)
 
-        features, coords = self._embed(coords, features, padding_mask, patches)
+        features, coords = self._embed(coords, features, padding_mask, patches, patches_cnn)
 
         x = features
 

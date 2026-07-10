@@ -212,7 +212,8 @@ class WrappedLightningModule(pl.LightningModule):
         padding_mask = batch["padding_mask"]
         padding_mask = padding_mask.bool()
 
-        A_pred = self.model(coords, feats, padding_mask=padding_mask)
+        patches_cnn = batch.get("patches_cnn", None)
+        A_pred = self.model(coords, feats, padding_mask=padding_mask, patches_cnn=patches_cnn)
         # remove inf values that might happen due to float16 numerics
         A_pred.clamp_(torch.finfo(torch.float16).min, torch.finfo(torch.float16).max)
 
@@ -777,6 +778,8 @@ def train(args):
             attn_positional_bias_n_spatial=args.attn_positional_bias_n_spatial,
             attn_dist_mode=args.attn_dist_mode,
             causal_norm=args.causal_norm,
+            use_cnn=args.use_cnn,
+            cnn_checkpoint=args.cnn_checkpoint,
         )
 
         dummy_model_lightning = WrappedLightningModule(
@@ -826,6 +829,7 @@ def train(args):
         compress=args.compress,
         use_gt=args.use_gt,
         slice_pct=(0.0, args.train_fraction),
+        use_cnn=args.use_cnn,
     )
     sampler_kwargs = dict(
         batch_size=args.batch_size,
@@ -929,6 +933,8 @@ def train(args):
             attn_dist_mode=args.attn_dist_mode,
             causal_norm=args.causal_norm,
             knn_neighbors=args.knn_neighbors,
+            use_cnn=args.use_cnn,
+            cnn_checkpoint=args.cnn_checkpoint,
         )
 
     if args.init_encoder is not None:
@@ -1120,6 +1126,16 @@ def parse_train_args():
     parser.add_argument(
         "--ssl_only", type=str2bool, default=False,
         help="Run SSL pretraining and exit (caches checkpoint for later runs)"
+    )
+
+    # CNN feature injection
+    parser.add_argument(
+        "--use_cnn", type=str2bool, default=False,
+        help="Inject frozen CNN patch features (additive residual) into transformer"
+    )
+    parser.add_argument(
+        "--cnn_checkpoint", type=str, default=None,
+        help="Path to frozen ScaledCNN checkpoint (.pt file)"
     )
 
     parser.add_argument(

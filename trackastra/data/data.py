@@ -21,6 +21,7 @@ from tqdm import tqdm
 
 from trackastra.data import wrfeat
 from trackastra.data._check_ctc import _check_ctc, _get_node_attributes
+from trackastra.model.dino_encoder import extract_patches as _extract_patches_dino
 
 # Lazy import of augmentations (training-only dependencies)
 # from trackastra.data.augmentations import AugmentationPipeline, RandomCrop, default_augmenter
@@ -137,6 +138,7 @@ class CTCData(Dataset):
         crop_size: tuple | None = None,
         return_dense: bool = False,
         compress: bool = False,
+        use_cnn: bool = False,
         **kwargs,
     ) -> None:
         """_summary_.
@@ -166,6 +168,8 @@ class CTCData(Dataset):
                 Return dense masks and images in the data samples.
             compress (bool):
                 Compress elements/remove img if not needed to save memory for large datasets
+            use_cnn (bool):
+                If True, extract 64x64 CNN patches for each cell.
         """
         super().__init__()
 
@@ -180,6 +184,7 @@ class CTCData(Dataset):
         self.detection_folders = detection_folders
         self.ndim = ndim
         self.features = features
+        self.use_cnn = use_cnn
 
         if features not in ("none", "wrfeat") and features not in _PROPERTIES[ndim]:
             raise ValueError(
@@ -1188,6 +1193,11 @@ class CTCData(Dataset):
             else:
                 logger.debug("Skipping cropping")
 
+        # Save pre-augmentation coords for CNN patch extraction
+        if self.use_cnn:
+            _cnn_save_coords = feat.coords.copy()
+            _cnn_save_timepoints = feat.timepoints.copy()
+
         if self.augmenter is not None:
             feat = self.augmenter(feat)
 
@@ -1215,6 +1225,23 @@ class CTCData(Dataset):
             coords[:, 1:] += torch.randint(0, 512, (1, self.ndim))
         else:
             coords = coords0.clone()
+
+        # Extract CNN patches from raw image at pre-augmentation centroids
+        if self.use_cnn:
+            # img shape: (T, H, W) for 2D
+            patch_list = []
+            for t in np.unique(_cnn_save_timepoints):
+                t_mask = _cnn_save_timepoints == t
+                t_coords = _cnn_save_coords[t_mask]
+                t_img = img[t] if img.ndim == 3 else img
+                patch_list.append(
+                    _extract_patches_dino(t_img, t_coords, patch_size=64)
+                )
+            patches_cnn = np.concatenate(patch_list, axis=0)  # (N, 64, 64)
+            patches_cnn = patches_cnn[:, None, :, :]          # (N, 1, 64, 64)
+        else:
+            patches_cnn = None
+
         res = dict(
             features=features,
             coords0=coords0,
@@ -1223,6 +1250,8 @@ class CTCData(Dataset):
             timepoints=timepoints,
             labels=labels,
         )
+        if patches_cnn is not None:
+            res["patches_cnn"] = torch.from_numpy(patches_cnn).float()
 
         if return_dense:
             if all([x is not None for x in img]):
@@ -1431,6 +1460,7 @@ def collate_sequence_padding(batch):
         "pretrained_feats": 0,
         "labels": 0,  # Not needed, remove for speed.
         "timepoints": -1,  # There are real timepoints with t=0. -1 for distinction from that.
+        "patches_cnn": 0,  # (N, 1, 64, 64) CNN patches, padded with zeros.
     }
     set_keys = {
         k: v
