@@ -1,15 +1,17 @@
 """
-DINOv2 encoder for cell patch features.
+DINOv2 / DINOv3 encoder for cell patch features.
 
-Provides frozen DINOv2 visual backbone + learned projection head.
+Provides frozen DINO visual backbones + learned projection head.
 Used by TrackingTransformer when use_dino=True.
 """
 
+import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+logger = logging.getLogger(__name__)
 
 # ─── patch extraction ──────────────────────────────────────────────────────────
 
@@ -17,6 +19,20 @@ PATCH_SIZE = 64
 DINO_INPUT_SIZE = 224
 DINO_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
 DINO_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+
+# Model specs for DINOv2 and DINOv3
+DINO_SPECS = {
+    "v2": {
+        "repo": "facebookresearch/dinov2",
+        "model": "dinov2_vits14",
+        "dim": 384,
+    },
+    "v3": {
+        "repo": "facebookresearch/dinov3",
+        "model": "dinov3_vits16",
+        "dim": 384,
+    },
+}
 
 
 def extract_patches(
@@ -69,32 +85,45 @@ def extract_patches(
 
 
 class DINOBackbone(nn.Module):
-    """Frozen DINOv2 ViT-S/14 encoder.
+    """Frozen DINOv2/DINOv3 ViT encoder with lazy loading.
 
-    Lazily loaded on first forward pass (to avoid hub download at import time).
+    Args:
+        version: "v2" for DINOv2 (vits14, 384D) or "v3" for DINOv3 (vits16, 384D).
     """
 
-    _model: nn.Module | None = None
+    _models: dict = {}
+
+    def __init__(self, version: str = "v2"):
+        super().__init__()
+        if version not in DINO_SPECS:
+            raise ValueError(f"Unknown DINO version '{version}'. Choose from {list(DINO_SPECS)}")
+        self._version = version
+        self._spec = DINO_SPECS[version]
 
     @classmethod
-    def load(cls) -> nn.Module:
-        if cls._model is None:
-            cls._model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
-            cls._model.eval()
-            for p in cls._model.parameters():
+    def _load_spec(cls, spec: dict) -> nn.Module:
+        key = spec["model"]
+        if key not in cls._models:
+            cls._models[key] = torch.hub.load(spec["repo"], spec["model"])
+            cls._models[key].eval()
+            for p in cls._models[key].parameters():
                 p.requires_grad = False
-        return cls._model
+        return cls._models[key]
+
+    @property
+    def dim(self) -> int:
+        return self._spec["dim"]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Extract DINOv2 CLS token embeddings.
+        """Extract DINO CLS token embeddings.
 
         Args:
             x: (N, 3, 224, 224) float32, ImageNet-normalized on any device.
 
         Returns:
-            (N, 384) float32 embeddings on the same device as input.
+            (N, embed_dim) float32 embeddings.
         """
-        model = self.load()
+        model = self._load_spec(self._spec)
         if next(model.parameters()).device != x.device:
             model = model.to(x.device)
         return model(x)
@@ -108,14 +137,27 @@ class DINOProjection(nn.Module):
 
     Maps: (B, N, 1, P, P) cell patches → (B, N, d_model) embeddings.
     Handles normalization, resize, DINO forward, and projection internally.
+
+    Args:
+        d_model: Output embedding dimension for the transformer.
+        hidden: Hidden dimension for the MLP projection head.
+        patch_size: Square patch size to crop around centroids.
+        version: "v2" (DINOv2 vits14, 384D) or "v3" (DINOv3 vits16, 384D).
     """
 
-    def __init__(self, d_model: int = 320, hidden: int = 256, patch_size: int = PATCH_SIZE):
+    def __init__(
+        self,
+        d_model: int = 320,
+        hidden: int = 256,
+        patch_size: int = PATCH_SIZE,
+        version: str = "v2",
+    ):
         super().__init__()
         self.patch_size = patch_size
-        self.backbone = DINOBackbone()
+        self._version = version
+        self.backbone = DINOBackbone(version=version)
         self.proj = nn.Sequential(
-            nn.Linear(384, hidden),
+            nn.Linear(self.backbone.dim, hidden),
             nn.ReLU(),
             nn.Linear(hidden, d_model),
         )
@@ -130,20 +172,13 @@ class DINOProjection(nn.Module):
             (B, N, d_model) float32 embeddings.
         """
         B, N, C, P, _ = patches.shape
-        # Flatten batch+cell dims: (B*N, 1, P, P)
         x = patches.view(B * N, C, P, P)
-        # Resize to DINO input size
         x = F.interpolate(x, size=(DINO_INPUT_SIZE, DINO_INPUT_SIZE), mode="bilinear", align_corners=False)
-        # Convert to 3 channels
         x = x.expand(-1, 3, -1, -1)
-        # ImageNet normalization
         mean = DINO_MEAN.to(x.device)
         std = DINO_STD.to(x.device)
         x = (x - mean) / std
-        # DINO forward (no grad, frozen)
         with torch.no_grad():
-            feats = self.backbone(x)  # (B*N, 384)
-        # Project
-        feats = self.proj(feats)  # (B*N, d_model)
-        # Reshape back
+            feats = self.backbone(x)
+        feats = self.proj(feats)
         return feats.view(B, N, -1)

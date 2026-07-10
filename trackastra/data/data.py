@@ -1157,6 +1157,7 @@ class CTCData(Dataset):
 
     def _getitem_wrfeat(self, n: int, return_dense=None):
         # if not set, use default
+        from trackastra.model.dino_encoder import extract_patches as _extract_patches_dino
 
         if return_dense is None:
             return_dense = self.return_dense
@@ -1235,7 +1236,6 @@ class CTCData(Dataset):
                 t_img = img[t] if img.ndim == 3 else img
                 patch_list.append(
 
-                    from trackastra.model.dino_encoder import extract_patches as _extract_patches_dino
                     _extract_patches_dino(t_img, t_coords, patch_size=64)
                 )
             patches_cnn = np.concatenate(patch_list, axis=0)  # (N, 64, 64)
