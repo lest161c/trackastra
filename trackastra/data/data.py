@@ -1176,6 +1176,7 @@ class CTCData(Dataset):
             mask = mask.decompress()
         if return_dense and isinstance(img, _CompressedArray):
             img = img.decompress()
+        img = np.asarray(img)  # ensure numpy for DataLoader workers
         if isinstance(assoc_matrix, _CompressedArray):
             assoc_matrix = assoc_matrix.decompress()
 
@@ -1233,7 +1234,7 @@ class CTCData(Dataset):
             for t in np.unique(_cnn_save_timepoints):
                 t_mask = _cnn_save_timepoints == t
                 t_coords = _cnn_save_coords[t_mask]
-                t_img = np.asarray(img[t])
+                t_img = img[t]
                 patch_list.append(
 
                     _extract_patches_dino(t_img, t_coords, patch_size=64)
