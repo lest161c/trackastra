@@ -1229,6 +1229,9 @@ class CTCData(Dataset):
 
         # Extract CNN patches from raw image at pre-augmentation centroids
         if self.use_cnn:
+            # DataLoader workers may receive _CompressedArray instead of numpy
+            if isinstance(img, _CompressedArray):
+                img = img.decompress()
             # img shape: (T, H, W) for 2D
             patch_list = []
             for t in np.unique(_cnn_save_timepoints):
@@ -1236,7 +1239,6 @@ class CTCData(Dataset):
                 t_coords = _cnn_save_coords[t_mask]
                 t_img = img[t]
                 patch_list.append(
-
                     _extract_patches_dino(t_img, t_coords, patch_size=64)
                 )
             patches_cnn = np.concatenate(patch_list, axis=0)  # (N, 64, 64)
