@@ -1233,7 +1233,7 @@ class CTCData(Dataset):
             for t in np.unique(_cnn_save_timepoints):
                 t_mask = _cnn_save_timepoints == t
                 t_coords = _cnn_save_coords[t_mask]
-                t_img = img[t] if img.ndim == 3 else img
+                t_img = img[t] if len(img.shape) == 3 else img
                 patch_list.append(
 
                     _extract_patches_dino(t_img, t_coords, patch_size=64)
