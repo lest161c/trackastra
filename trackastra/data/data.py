@@ -1169,14 +1169,16 @@ class CTCData(Dataset):
         img = track["img"]
         mask = track["mask"]
         timepoints = track["timepoints"]
-        # track["t1"]
+        t1 = track["t1"]  # window start frame index
         feat = track["wrfeat"]
 
         if return_dense and isinstance(mask, _CompressedArray):
             mask = mask.decompress()
         if return_dense and isinstance(img, _CompressedArray):
             img = img.decompress()
-        img = np.asarray(img)  # ensure numpy for DataLoader workers
+        # Only convert to array if not _CompressedArray (avoids 0-d object array)
+        if not isinstance(img, _CompressedArray):
+            img = np.asarray(img)
         if isinstance(assoc_matrix, _CompressedArray):
             assoc_matrix = assoc_matrix.decompress()
 
@@ -1194,10 +1196,11 @@ class CTCData(Dataset):
             else:
                 logger.debug("Skipping cropping")
 
-        # Save pre-augmentation coords for CNN patch extraction
+        # Save pre-augmentation coords for CNN patch extraction.
+        # timepoints are absolute frame indices; convert to relative for img indexing.
         if self.use_cnn:
             _cnn_save_coords = feat.coords.copy()
-            _cnn_save_timepoints = feat.timepoints.copy()
+            _cnn_save_timepoints = (feat.timepoints - t1).copy()
 
         if self.augmenter is not None:
             feat = self.augmenter(feat)
