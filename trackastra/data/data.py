@@ -1229,9 +1229,22 @@ class CTCData(Dataset):
 
         # Extract CNN patches from raw image at pre-augmentation centroids
         if self.use_cnn:
-            # DataLoader workers may receive _CompressedArray instead of numpy
+            # DataLoader workers may receive _CompressedArray instead of numpy.
+            # Handle both the _CompressedArray case and the case where
+            # np.asarray() at line 1179 turned it into a 0-d object array.
             if isinstance(img, _CompressedArray):
                 img = img.decompress()
+            if isinstance(img, np.ndarray) and img.ndim == 0:
+                # np.asarray() on _CompressedArray produces 0-d object array;
+                # extract the _CompressedArray and decompress it.
+                item = img.item()
+                if isinstance(item, _CompressedArray):
+                    img = item.decompress()
+                else:
+                    # Last resort: promote to at least 3-D
+                    img = np.atleast_3d(np.asarray(item))
+            if not isinstance(img, np.ndarray):
+                img = np.asarray(img)
             # img shape: (T, H, W) for 2D
             patch_list = []
             for t in np.unique(_cnn_save_timepoints):
