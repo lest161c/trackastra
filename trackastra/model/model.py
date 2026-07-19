@@ -310,6 +310,7 @@ class TrackingTransformer(torch.nn.Module):
         use_dino: bool = False,
         use_cnn: bool = False,
         cnn_checkpoint: str | None = None,
+        cnn_trainable: bool = False,
         knn_neighbors: int = -1,
     ):
         super().__init__()
@@ -333,6 +334,7 @@ class TrackingTransformer(torch.nn.Module):
             use_dino=use_dino,
             use_cnn=use_cnn,
             cnn_checkpoint=cnn_checkpoint,
+            cnn_trainable=cnn_trainable,
             knn_neighbors=knn_neighbors,
         )
 
@@ -347,12 +349,28 @@ class TrackingTransformer(torch.nn.Module):
             self.cnn_proj = nn.Linear(128, d_model)
             if cnn_checkpoint is not None:
                 self.cnn_encoder = load_cnn_checkpoint(cnn_checkpoint, scale='large')
+                if cnn_trainable:
+                    self.cnn_encoder.train()
+                    for p in self.cnn_encoder.parameters():
+                        p.requires_grad = True
+                else:
+                    # Explicitly freeze loaded checkpoint when not trainable
+                    self.cnn_encoder.eval()
+                    for p in self.cnn_encoder.parameters():
+                        p.requires_grad = False
+                    logger.info("Loaded CNN checkpoint (frozen)")
             else:
                 self.cnn_encoder = ScaledCNN(scale='large', out_dim=128)
                 self.cnn_encoder.eval()
                 for p in self.cnn_encoder.parameters():
                     p.requires_grad = False
                 logger.info("Created untrained frozen ScaledCNN (no checkpoint)")
+            # When cnn_trainable=True, unfreeze CNN encoder regardless of checkpoint source
+            if cnn_trainable:
+                self.cnn_encoder.train()
+                for p in self.cnn_encoder.parameters():
+                    p.requires_grad = True
+                logger.info("CNN encoder is trainable")
         self.norm = nn.LayerNorm(d_model)
 
         if knn_neighbors > 0:
@@ -456,7 +474,8 @@ class TrackingTransformer(torch.nn.Module):
         if patches_cnn is not None and self.config.get("use_cnn", False):
             B, N = patches_cnn.shape[:2]
             cnn_in = patches_cnn.reshape(B * N, 1, 64, 64)
-            with torch.no_grad():
+            cnn_trainable = self.config.get("cnn_trainable", False)
+            with torch.set_grad_enabled(cnn_trainable):
                 cnn_out = self.cnn_encoder(cnn_in)  # (B*N, 128)
             cnn_out = cnn_out.reshape(B, N, -1)      # (B, N, 128)
             features = features + self.cnn_proj(cnn_out)

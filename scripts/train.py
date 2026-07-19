@@ -780,6 +780,7 @@ def train(args):
             causal_norm=args.causal_norm,
             use_cnn=args.use_cnn,
             cnn_checkpoint=args.cnn_checkpoint,
+            cnn_trainable=args.cnn_trainable,
         )
 
         dummy_model_lightning = WrappedLightningModule(
@@ -830,6 +831,7 @@ def train(args):
         use_gt=args.use_gt,
         slice_pct=(0.0, args.train_fraction),
         use_cnn=args.use_cnn,
+        cnn_feat_dropout=args.cnn_feat_dropout,
     )
     sampler_kwargs = dict(
         batch_size=args.batch_size,
@@ -935,6 +937,7 @@ def train(args):
             knn_neighbors=args.knn_neighbors,
             use_cnn=args.use_cnn,
             cnn_checkpoint=args.cnn_checkpoint,
+            cnn_trainable=args.cnn_trainable,
         )
 
     if args.init_encoder is not None:
@@ -1136,6 +1139,14 @@ def parse_train_args():
     parser.add_argument(
         "--cnn_checkpoint", type=str, default=None,
         help="Path to frozen ScaledCNN checkpoint (.pt file)"
+    )
+    parser.add_argument(
+        "--cnn_feat_dropout", type=float, default=0.0,
+        help="Probability of zeroing CNN patch features (feature dropout)"
+    )
+    parser.add_argument(
+        "--cnn_trainable", type=str2bool, default=False,
+        help="Unfreeze CNN encoder for joint fine-tuning"
     )
 
     parser.add_argument(

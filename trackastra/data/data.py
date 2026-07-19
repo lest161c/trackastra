@@ -138,6 +138,7 @@ class CTCData(Dataset):
         return_dense: bool = False,
         compress: bool = False,
         use_cnn: bool = False,
+        cnn_feat_dropout: float = 0.0,
         **kwargs,
     ) -> None:
         """_summary_.
@@ -184,6 +185,7 @@ class CTCData(Dataset):
         self.ndim = ndim
         self.features = features
         self.use_cnn = use_cnn
+        self.cnn_feat_dropout = cnn_feat_dropout
 
         if features not in ("none", "wrfeat") and features not in _PROPERTIES[ndim]:
             raise ValueError(
@@ -1259,6 +1261,11 @@ class CTCData(Dataset):
                 )
             patches_cnn = np.concatenate(patch_list, axis=0)  # (N, 64, 64)
             patches_cnn = patches_cnn[:, None, :, :]          # (N, 1, 64, 64)
+            # Feature dropout: randomly zero out CNN features
+            if getattr(self, 'cnn_feat_dropout', 0.0) > 0:
+                import random as _random
+                if _random.random() < self.cnn_feat_dropout:
+                    patches_cnn = np.zeros_like(patches_cnn)
         else:
             patches_cnn = None
 
