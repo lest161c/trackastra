@@ -628,8 +628,30 @@ class MyModelCheckpoint(pl.pytorch.callbacks.Callback):
                 pl_module.model.save(self._logdir)
 
 
+def _step_lambda(progress: float) -> float:
+    """Step schedule for CNN feature mixing weight λ(t).
+    
+    Holds at 1.0 (full CNN) for first 6% of training, then steps down:
+        1.0  for progress < 0.06  (epochs   0– 30 of 500)
+        0.5  for 0.06 ≤ p < 0.12  (epochs  30– 60)
+        0.1  for 0.12 ≤ p < 0.20  (epochs  60–100)
+        0.0  for progress ≥ 0.20  (epochs 100+)
+    """
+    if progress < 0.06:
+        return 1.0
+    elif progress < 0.12:
+        return 0.5
+    elif progress < 0.20:
+        return 0.1
+    else:
+        return 0.0
+
+
 class LambdaDecayCallback(pl.Callback):
-    """Updates the λ(t) step counter on the model each training batch."""
+    """Updates the λ(t) step counter on the model each training batch.
+    
+    Uses step schedule: λ=1.0 (0-6%), 0.5 (6-12%), 0.1 (12-20%), 0.0 (20%+).
+    """
 
     def __init__(self, total_steps: int = 0):
         self.total_steps = total_steps
@@ -643,9 +665,9 @@ class LambdaDecayCallback(pl.Callback):
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if hasattr(pl_module.model, "set_lambda_step"):
             pl_module.model.set_lambda_step(trainer.global_step, self.total_steps)
-            # Log lambda_t to W&B / TensorBoard
+            # Compute step-schedule λ(t) for logging
             progress = min(1.0, trainer.global_step / max(1, self.total_steps))
-            lambda_t = 0.5 * (1.0 + math.cos(math.pi * progress))
+            lambda_t = _step_lambda(progress)
             pl_module.log(
                 "lambda_t", lambda_t, on_step=True, on_epoch=False, prog_bar=False
             )

@@ -288,6 +288,28 @@ class DecoderLayer(nn.Module):
 #         return x, y
 
 
+def _step_lambda(progress: float) -> float:
+    """Step schedule for CNN feature mixing weight λ(t).
+
+    Holds at 1.0 (full CNN) for first 6% of training, then steps down:
+        1.0  for progress < 0.06  (epochs   0– 30 of 500)
+        0.5  for 0.06 ≤ p < 0.12  (epochs  30– 60)
+        0.1  for 0.12 ≤ p < 0.20  (epochs  60–100)
+        0.0  for progress ≥ 0.20  (epochs 100+)
+    This mirrors TextTeacher's constant-λ strategy followed by rapid
+    transition to pure regionprops, giving the model 400 epochs to
+    converge on regionprops alone.
+    """
+    if progress < 0.06:
+        return 1.0
+    elif progress < 0.12:
+        return 0.5
+    elif progress < 0.20:
+        return 0.1
+    else:
+        return 0.0
+
+
 class TrackingTransformer(torch.nn.Module):
     def __init__(
         self,
@@ -479,9 +501,11 @@ class TrackingTransformer(torch.nn.Module):
             features = self.feat_embed(features)
             features = torch.cat((pos, features), axis=-1)
             features = self.proj(features)
-            features = self.norm(features)
+            # Old behaviour: norm before CNN (no lambda decay)
+            if not self.config.get("lambda_decay", False):
+                features = self.norm(features)
 
-        # CNN residual feature injection (additive, after norm)
+        # CNN residual feature injection
         if patches_cnn is not None and self.config.get("use_cnn", False):
             B, N = patches_cnn.shape[:2]
             cnn_in = patches_cnn.reshape(B * N, 1, 64, 64)
@@ -489,13 +513,15 @@ class TrackingTransformer(torch.nn.Module):
             with torch.set_grad_enabled(cnn_trainable):
                 cnn_out = self.cnn_encoder(cnn_in)  # (B*N, 128)
             cnn_out = cnn_out.reshape(B, N, -1)      # (B, N, 128)
-            # Scheduled mixing: λ(t) cosine decay from 1→0
+            cnn_contrib = self.cnn_proj(cnn_out)
+            # Pre-norm injection with step schedule: norm AFTER blend
             if self.config.get("lambda_decay", False) and self.training:
                 progress = min(1.0, self._lambda_step.item() / self._lambda_total.item())
-                lambda_t = 0.5 * (1.0 + math.cos(math.pi * progress))
-                features = features + lambda_t * self.cnn_proj(cnn_out)
-            else:
-                features = features + self.cnn_proj(cnn_out)
+                lambda_t = _step_lambda(progress)
+                cnn_contrib = lambda_t * cnn_contrib
+            features = features + cnn_contrib
+            if self.config.get("lambda_decay", False):
+                features = self.norm(features)
 
         return features, coords
 
