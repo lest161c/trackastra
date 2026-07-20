@@ -1191,7 +1191,7 @@ def parse_train_args():
         help="Unfreeze CNN encoder for joint fine-tuning"
     )
     parser.add_argument(
-        "--lambda-decay", type=str2bool, default=False,
+        "--lambda-decay", "--lambda_decay", type=str2bool, default=False,
         help="Enable cosine decay of CNN feature weight from 1.0 to 0.0 over training"
     )
 
