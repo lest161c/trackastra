@@ -340,7 +340,7 @@ class WrappedLightningModule(pl.LightningModule):
         )
 
         # self.train_loss.append(loss)
-        if isinstance(self.logger, WandbLogger):
+        if isinstance(self.logger, WandbLogger) and not os.environ.get("WANDB_LIGHT"):
             histogram = wandb.Histogram(
                 torch.sum(batch["timepoints"] != -1, dim=1).detach().cpu().numpy()
             )
@@ -498,7 +498,7 @@ class WrappedLightningModule(pl.LightningModule):
                             dataformats="CHW",
                         )
 
-            elif isinstance(self.logger, WandbLogger):
+            elif isinstance(self.logger, WandbLogger) and not os.environ.get("WANDB_LIGHT"):
                 self.logger.log_image("assoc_matrix", [wandb.Image(
                     np.moveaxis(over.detach().cpu().numpy(), 0, -1), mode="RGB"
                 )])
