@@ -498,16 +498,17 @@ class WrappedLightningModule(pl.LightningModule):
                             dataformats="CHW",
                         )
 
-            elif isinstance(self.logger, WandbLogger) and not os.environ.get("WANDB_LIGHT"):
-                self.logger.log_image("assoc_matrix", [wandb.Image(
-                    np.moveaxis(over.detach().cpu().numpy(), 0, -1), mode="RGB"
-                )])
-                self.logger.log_image("loss", [wandb.Image(
-                    loss_before_reduce.unsqueeze(2).detach().cpu().numpy()
-                )])
-                self.logger.log_image("loss_mask", [wandb.Image(
-                    out["mask"][sample].unsqueeze(2).detach().cpu().numpy()
-                )])
+            elif isinstance(self.logger, WandbLogger):
+                if not os.environ.get("WANDB_LIGHT"):
+                    self.logger.log_image("assoc_matrix", [wandb.Image(
+                        np.moveaxis(over.detach().cpu().numpy(), 0, -1), mode="RGB"
+                    )])
+                    self.logger.log_image("loss", [wandb.Image(
+                        loss_before_reduce.unsqueeze(2).detach().cpu().numpy()
+                    )])
+                    self.logger.log_image("loss_mask", [wandb.Image(
+                        out["mask"][sample].unsqueeze(2).detach().cpu().numpy()
+                    )])
             elif self.logger is None:
                 pass
             else:
