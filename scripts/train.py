@@ -1,3 +1,4 @@
+import math
 import os
 
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -626,6 +627,42 @@ class MyModelCheckpoint(pl.pytorch.callbacks.Callback):
                 pl_module.model.save(self._logdir)
 
 
+class LambdaDecayCallback(pl.Callback):
+    """Updates the λ(t) step counter on the model each training batch."""
+
+    def __init__(self, total_steps: int = 0):
+        self.total_steps = total_steps
+
+    def on_fit_start(self, trainer, pl_module):
+        """Get accurate total_steps from the trainer after setup."""
+        if self.total_steps == 0:
+            self.total_steps = int(trainer.estimated_stepping_batches)
+        logging.info(f"LambdaDecayCallback: total_steps={self.total_steps}")
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if hasattr(pl_module.model, "set_lambda_step"):
+            pl_module.model.set_lambda_step(trainer.global_step, self.total_steps)
+            # Log lambda_t to W&B / TensorBoard
+            progress = min(1.0, trainer.global_step / max(1, self.total_steps))
+            lambda_t = 0.5 * (1.0 + math.cos(math.pi * progress))
+            pl_module.log(
+                "lambda_t", lambda_t, on_step=True, on_epoch=False, prog_bar=False
+            )
+            # Log cnn_proj weight norm every 100 steps
+            if (
+                hasattr(pl_module.model, "cnn_proj")
+                and trainer.global_step % 100 == 0
+            ):
+                cnn_proj_norm = pl_module.model.cnn_proj.weight.norm().item()
+                pl_module.log(
+                    "cnn_proj_norm",
+                    cnn_proj_norm,
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=False,
+                )
+
+
 # def weight_matrix(coords: torch.Tensor, scale: float = 100):
 #     D = torch.linalg.norm(coords.unsqueeze(1) - coords.unsqueeze(2), dim=-1)
 #     weight = 1 + 10 * torch.exp(-(D**2) / 2 / scale**2).to(coords.device)
@@ -781,6 +818,7 @@ def train(args):
             use_cnn=args.use_cnn,
             cnn_checkpoint=args.cnn_checkpoint,
             cnn_trainable=args.cnn_trainable,
+            lambda_decay=args.lambda_decay,
         )
 
         dummy_model_lightning = WrappedLightningModule(
@@ -898,6 +936,9 @@ def train(args):
         )
     )
 
+    if args.lambda_decay:
+        callbacks.append(LambdaDecayCallback())
+
     if args.example_images:
         callbacks.append(ExampleImages())
 
@@ -938,6 +979,7 @@ def train(args):
             use_cnn=args.use_cnn,
             cnn_checkpoint=args.cnn_checkpoint,
             cnn_trainable=args.cnn_trainable,
+            lambda_decay=args.lambda_decay,
         )
 
     if args.init_encoder is not None:
@@ -1147,6 +1189,10 @@ def parse_train_args():
     parser.add_argument(
         "--cnn_trainable", type=str2bool, default=False,
         help="Unfreeze CNN encoder for joint fine-tuning"
+    )
+    parser.add_argument(
+        "--lambda-decay", type=str2bool, default=False,
+        help="Enable cosine decay of CNN feature weight from 1.0 to 0.0 over training"
     )
 
     parser.add_argument(

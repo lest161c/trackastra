@@ -1,6 +1,7 @@
 """Transformer class."""
 
 import logging
+import math
 from collections import OrderedDict
 from pathlib import Path
 from typing import Literal
@@ -312,6 +313,7 @@ class TrackingTransformer(torch.nn.Module):
         cnn_checkpoint: str | None = None,
         cnn_trainable: bool = False,
         knn_neighbors: int = -1,
+        lambda_decay: bool = False,
     ):
         super().__init__()
 
@@ -336,7 +338,11 @@ class TrackingTransformer(torch.nn.Module):
             cnn_checkpoint=cnn_checkpoint,
             cnn_trainable=cnn_trainable,
             knn_neighbors=knn_neighbors,
+            lambda_decay=lambda_decay,
         )
+
+        self.register_buffer("_lambda_step", torch.tensor(0, dtype=torch.long))
+        self.register_buffer("_lambda_total", torch.tensor(1, dtype=torch.long))
 
         self.proj = nn.Linear(
             (1 + coord_dim) * pos_embed_per_dim + feat_dim * feat_embed_per_dim, d_model
@@ -447,6 +453,11 @@ class TrackingTransformer(torch.nn.Module):
 
         # self.pos_embed = NoPositionalEncoding(d=pos_embed_per_dim * (1 + coord_dim))
 
+    def set_lambda_step(self, step, total):
+        """Update the λ(t) step counter for cosine-decayed CNN feature injection."""
+        self._lambda_step.fill_(step)
+        self._lambda_total.fill_(max(1, total))
+
     def _embed(self, coords, features, padding_mask, patches=None, patches_cnn=None):
         """Shared embedding logic for forward() and encode()."""
         if padding_mask is not None and padding_mask.any():
@@ -478,7 +489,13 @@ class TrackingTransformer(torch.nn.Module):
             with torch.set_grad_enabled(cnn_trainable):
                 cnn_out = self.cnn_encoder(cnn_in)  # (B*N, 128)
             cnn_out = cnn_out.reshape(B, N, -1)      # (B, N, 128)
-            features = features + self.cnn_proj(cnn_out)
+            # Scheduled mixing: λ(t) cosine decay from 1→0
+            if self.config.get("lambda_decay", False) and self.training:
+                progress = min(1.0, self._lambda_step.item() / self._lambda_total.item())
+                lambda_t = 0.5 * (1.0 + math.cos(math.pi * progress))
+                features = features + lambda_t * self.cnn_proj(cnn_out)
+            else:
+                features = features + self.cnn_proj(cnn_out)
 
         return features, coords
 
