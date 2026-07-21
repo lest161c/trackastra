@@ -737,6 +737,6 @@ class TrackingTransformer(torch.nn.Module):
             state = OrderedDict(
                 (k[6:], v) for k, v in state.items() if k.startswith("model.")
             )
-        model.load_state_dict(state)
+        model.load_state_dict(state, strict=False)
 
         return model
