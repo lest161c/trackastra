@@ -336,6 +336,7 @@ class TrackingTransformer(torch.nn.Module):
         cnn_trainable: bool = False,
         knn_neighbors: int = -1,
         lambda_decay: bool = False,
+        concat_mode: bool = False,
     ):
         super().__init__()
 
@@ -361,6 +362,7 @@ class TrackingTransformer(torch.nn.Module):
             cnn_trainable=cnn_trainable,
             knn_neighbors=knn_neighbors,
             lambda_decay=lambda_decay,
+            concat_mode=concat_mode,
         )
 
         self.register_buffer("_lambda_step", torch.tensor(0, dtype=torch.long))
@@ -374,7 +376,14 @@ class TrackingTransformer(torch.nn.Module):
             pos_embed_dim = (1 + coord_dim) * pos_embed_per_dim
             self.dino_pos_proj = nn.Linear(pos_embed_dim, d_model)
         if use_cnn:
-            self.cnn_proj = nn.Linear(128, d_model)
+            if concat_mode:
+                # CONCAT injection: project CNN to small dim (64), then fuse_proj
+                # can learn per-dimension gating — model can zero out individual CNN dims
+                self.cnn_proj = nn.Linear(128, 64)
+                self.cnn_fuse = nn.Linear(d_model + 64, d_model)
+            else:
+                # ADDITIVE injection: project CNN to full d_model (legacy)
+                self.cnn_proj = nn.Linear(128, d_model)
             if cnn_checkpoint is not None:
                 self.cnn_encoder = load_cnn_checkpoint(cnn_checkpoint, scale='large')
                 if cnn_trainable:
@@ -513,15 +522,24 @@ class TrackingTransformer(torch.nn.Module):
             with torch.set_grad_enabled(cnn_trainable):
                 cnn_out = self.cnn_encoder(cnn_in)  # (B*N, 128)
             cnn_out = cnn_out.reshape(B, N, -1)      # (B, N, 128)
-            cnn_contrib = self.cnn_proj(cnn_out)
-            # Pre-norm injection with step schedule: norm AFTER blend
-            if self.config.get("lambda_decay", False) and self.training:
-                progress = min(1.0, self._lambda_step.item() / self._lambda_total.item())
-                lambda_t = _step_lambda(progress)
-                cnn_contrib = lambda_t * cnn_contrib
-            features = features + cnn_contrib
-            if self.config.get("lambda_decay", False):
-                features = self.norm(features)
+            if self.config.get("concat_mode", False):
+                # CONCAT injection: project CNN to 64-dim, norm features, cat, fuse
+                # fuse_proj can learn per-dimension gating — model can zero out individual CNN dims
+                cnn_contrib = self.cnn_proj(cnn_out)         # (B, N, 64)
+                features = self.norm(features)                # norm before concat
+                features = self.cnn_fuse(torch.cat([features, cnn_contrib], dim=-1))
+                features = self.norm(features)                # norm after fuse
+            else:
+                # ADDITIVE injection (legacy behaviour)
+                cnn_contrib = self.cnn_proj(cnn_out)
+                # Pre-norm injection with step schedule: norm AFTER blend
+                if self.config.get("lambda_decay", False) and self.training:
+                    progress = min(1.0, self._lambda_step.item() / self._lambda_total.item())
+                    lambda_t = _step_lambda(progress)
+                    cnn_contrib = lambda_t * cnn_contrib
+                features = features + cnn_contrib
+                if self.config.get("lambda_decay", False):
+                    features = self.norm(features)
 
         return features, coords
 

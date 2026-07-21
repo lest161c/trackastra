@@ -842,6 +842,7 @@ def train(args):
             cnn_checkpoint=args.cnn_checkpoint,
             cnn_trainable=args.cnn_trainable,
             lambda_decay=args.lambda_decay,
+            concat_mode=args.concat_mode,
         )
 
         dummy_model_lightning = WrappedLightningModule(
@@ -1003,6 +1004,7 @@ def train(args):
             cnn_checkpoint=args.cnn_checkpoint,
             cnn_trainable=args.cnn_trainable,
             lambda_decay=args.lambda_decay,
+            concat_mode=args.concat_mode,
         )
 
     if args.init_encoder is not None:
@@ -1216,6 +1218,11 @@ def parse_train_args():
     parser.add_argument(
         "--lambda-decay", "--lambda_decay", type=str2bool, default=False,
         help="Enable cosine decay of CNN feature weight from 1.0 to 0.0 over training"
+    )
+    parser.add_argument(
+        "--concat-mode", "--concat_mode", type=str2bool, default=False,
+        help="Use CONCAT (instead of ADDITIVE) CNN injection: project CNN to 64-dim, concatenate, fuse. "
+             "Lets the model learn per-dimension gating of CNN features."
     )
 
     parser.add_argument(
