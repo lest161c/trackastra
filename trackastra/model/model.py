@@ -365,8 +365,9 @@ class TrackingTransformer(torch.nn.Module):
             concat_mode=concat_mode,
         )
 
-        self.register_buffer("_lambda_step", torch.tensor(0, dtype=torch.long))
-        self.register_buffer("_lambda_total", torch.tensor(1, dtype=torch.long))
+        if lambda_decay or concat_mode:
+            self.register_buffer("_lambda_step", torch.tensor(0, dtype=torch.long))
+            self.register_buffer("_lambda_total", torch.tensor(1, dtype=torch.long))
 
         self.proj = nn.Linear(
             (1 + coord_dim) * pos_embed_per_dim + feat_dim * feat_embed_per_dim, d_model
@@ -486,6 +487,8 @@ class TrackingTransformer(torch.nn.Module):
 
     def set_lambda_step(self, step, total):
         """Update the λ(t) step counter for cosine-decayed CNN feature injection."""
+        if not hasattr(self, '_lambda_step'):
+            return
         self._lambda_step.fill_(step)
         self._lambda_total.fill_(max(1, total))
 
@@ -533,7 +536,7 @@ class TrackingTransformer(torch.nn.Module):
                 # ADDITIVE injection (legacy behaviour)
                 cnn_contrib = self.cnn_proj(cnn_out)
                 # Pre-norm injection with step schedule: norm AFTER blend
-                if self.config.get("lambda_decay", False) and self.training:
+                if self.config.get("lambda_decay", False) and self.training and hasattr(self, '_lambda_step'):
                     progress = min(1.0, self._lambda_step.item() / self._lambda_total.item())
                     lambda_t = _step_lambda(progress)
                     cnn_contrib = lambda_t * cnn_contrib
