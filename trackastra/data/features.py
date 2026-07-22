@@ -2,7 +2,10 @@ import itertools
 
 import numpy as np
 import pandas as pd
-from fast_regionprops import regionprops_table_fast
+try:
+    from fast_regionprops import regionprops_table_fast as _regionprops_backend
+except ImportError:
+    from skimage.measure import regionprops_table as _regionprops_backend
 
 # the property keys that are supported for 2 and 3 dim
 
@@ -73,7 +76,7 @@ def extract_features_regionprops(
     # mask[~np.isin(mask, labels)] = 0
 
     df = pd.DataFrame(
-        regionprops_table_fast(mask, intensity_image=img, properties=properties_tuple)
+        _regionprops_backend(mask, intensity_image=img, properties=properties_tuple)
     )
     assert df.columns[0] == "label"
     assert df.columns[1] == "area"

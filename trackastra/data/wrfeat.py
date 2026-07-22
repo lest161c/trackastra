@@ -14,7 +14,13 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch
-from fast_regionprops import regionprops_table_fast
+try:
+    from fast_regionprops import regionprops_table_fast as _regionprops_backend
+    _USE_FAST_REGIONPROPS = True
+except ImportError:
+    from skimage.measure import regionprops_table as _regionprops_backend
+    from skimage.measure import regionprops
+    _USE_FAST_REGIONPROPS = False
 from tqdm import tqdm
 
 from trackastra.data.utils import load_tiff_timeseries
@@ -62,6 +68,48 @@ def _filter_points(
     idx = np.where(np.all(idx, axis=0))[0]
     return idx
 
+
+
+def _border_dist(mask: np.ndarray, cutoff: float = 5):
+    """Returns distance to border normalized to 0 (far from border) and 1 (at border).
+
+    Pure numpy/scipy implementation used as fallback when fast-regionprops is not available.
+    """
+    assert not _USE_FAST_REGIONPROPS, (
+        "_border_dist should only be called when fast-regionprops is not available"
+    )
+    cutoff = int(cutoff)
+    border = np.ones(mask.shape, dtype=np.float32)
+    ndim = len(mask.shape)
+
+    for axis, size in enumerate(mask.shape):
+        # only apply to last two dimensions
+        if axis < ndim - 2:
+            continue
+
+        # Create fade values for the band [0, cutoff)
+        band_vals = np.arange(cutoff, dtype=np.float32) / cutoff
+        band_vals = band_vals[:size]
+        # Build slices for the low border
+        low_slices = [slice(None)] * ndim
+        low_slices[axis] = slice(0, cutoff)
+        border_low = border[tuple(low_slices)]
+        border_low_vals = np.minimum(
+            border_low, band_vals[(...,) + (None,) * (ndim - axis - 1)]
+        )
+        border[tuple(low_slices)] = border_low_vals
+        # Build slices for the high border
+        high_slices = [slice(None)] * ndim
+        high_slices[axis] = slice(max(0, size - cutoff), size)
+        band_vals_rev = band_vals[::-1]
+        border_high = border[tuple(high_slices)]
+        border_high_vals = np.minimum(
+            border_high, band_vals_rev[(...,) + (None,) * (ndim - axis - 1)]
+        )
+        border[tuple(high_slices)] = border_high_vals
+
+    dist = 1 - border
+    return tuple(r.intensity_max for r in regionprops(mask, intensity_image=dist))
 
 
 class WRFeatures:
@@ -169,23 +217,36 @@ class WRFeatures:
                 f"label and centroid should not be in properties {properties}"
             )
 
+        # When fast-regionprops is not available, compute border_dist separately
+        # because skimage's regionprops_table does not support it natively.
+        if not _USE_FAST_REGIONPROPS and "border_dist" in properties:
+            _use_border_dist_fallback = True
+            properties = tuple(p for p in properties if p != "border_dist")
+        else:
+            _use_border_dist_fallback = False
+
         df_properties = ("label", "centroid", *properties)
         dfs = []
         for i, (y, x) in enumerate(zip(mask, img)):
             _df = pd.DataFrame(
-                regionprops_table_fast(y, intensity_image=x, properties=df_properties)
+                _regionprops_backend(y, intensity_image=x, properties=df_properties)
             )
             _df["timepoint"] = i + t_start
+            if _use_border_dist_fallback:
+                _df["border_dist"] = _border_dist(y)
             dfs.append(_df)
         df = pd.concat(dfs)
 
-        # Drop per-axis border_dist columns, keep only overall scalar
-        border_cols = [c for c in df.columns if re.match(r"^border_dist-\d+$", c)]
-        df.drop(columns=border_cols, inplace=True, errors="ignore")
+        if _use_border_dist_fallback:
+            properties = (*properties, "border_dist")
+        else:
+            # Drop per-axis border_dist columns, keep only overall scalar
+            border_cols = [c for c in df.columns if re.match(r"^border_dist-\d+$", c)]
+            df.drop(columns=border_cols, inplace=True, errors="ignore")
 
-        # Normalize border_dist from pixel distance to [0,1]
-        if "border_dist" in df.columns:
-            df["border_dist"] = np.clip(df["border_dist"] / 5.0, 0, 1)
+            # Normalize border_dist from pixel distance to [0,1]
+            if "border_dist" in df.columns:
+                df["border_dist"] = np.clip(df["border_dist"] / 5.0, 0, 1)
 
         timepoints = df["timepoint"].values.astype(np.int32)
         labels = df["label"].values.astype(np.int32)
