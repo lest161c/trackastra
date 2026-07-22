@@ -47,6 +47,13 @@ def predict(batch: list[dict], model: TrackingTransformer) -> np.ndarray:
             pretrained_feats = None
     except KeyError:
         pretrained_feats = None
+    try:
+        if padded_batch.get("patches_cnn") is not None:
+            patches_cnn = padded_batch["patches_cnn"]
+        else:
+            patches_cnn = None
+    except KeyError:
+        patches_cnn = None
 
     coords = padded_batch["coords"]
     timepoints = padded_batch["timepoints"].long()
@@ -58,6 +65,8 @@ def predict(batch: list[dict], model: TrackingTransformer) -> np.ndarray:
         feats = feats.to(device)
     if pretrained_feats is not None:
         pretrained_feats = pretrained_feats.unsqueeze(0).to(device)
+    if patches_cnn is not None:
+        patches_cnn = patches_cnn.to(device)
     timepoints = timepoints.to(device)
     coords = coords.to(device)
     padding_mask = padding_mask.to(device)
@@ -66,13 +75,19 @@ def predict(batch: list[dict], model: TrackingTransformer) -> np.ndarray:
     coords = torch.cat((timepoints.unsqueeze(2).float(), coords), dim=2)
     with torch.no_grad():
         if pretrained_feats is None:
-            A = model(coords, features=feats, padding_mask=padding_mask)
+            A = model(
+                coords,
+                features=feats,
+                padding_mask=padding_mask,
+                patches_cnn=patches_cnn,
+            )
         else:
             A = model(
                 coords,
                 features=feats,
                 pretrained_features=pretrained_feats,
                 padding_mask=padding_mask,
+                patches_cnn=patches_cnn,
             )
 
         A = model.normalize_output(A, timepoints, coords)

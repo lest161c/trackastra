@@ -553,6 +553,8 @@ def build_windows(
     window_size: int,
     progbar_class=tqdm,
     as_torch: bool = False,
+    imgs: np.ndarray | None = None,
+    use_cnn: bool = False,
 ) -> list[dict]:
     if len(features) < 2:
         raise ValueError(f"Need at least 2 frames for tracking, got {len(features)}.")
@@ -590,6 +592,27 @@ def build_windows(
         # Add pre-trained features
         if pt_feats is not None:
             w["pretrained_feats"] = torch.from_numpy(pt_feats) if as_torch else pt_feats
+
+        # Extract CNN patches from raw image frames if enabled
+        if use_cnn and imgs is not None and len(feat) > 0:
+            from trackastra.model.dino_encoder import (
+                extract_patches as _extract_patches_dino,
+            )
+
+            patch_list = []
+            # Iterate over absolute timepoints in the window
+            for t in np.unique(feat.timepoints):
+                t_mask = feat.timepoints == t
+                t_coords = feat.coords[t_mask]
+                t_img = imgs[t]
+                patch_list.append(
+                    _extract_patches_dino(t_img, t_coords, patch_size=64)
+                )
+            patches_cnn = np.concatenate(patch_list, axis=0)
+            patches_cnn = patches_cnn[:, None, :, :]  # (N, 1, 64, 64)
+            w["patches_cnn"] = (
+                torch.from_numpy(patches_cnn).float() if as_torch else patches_cnn
+            )
 
         windows.append(w)
 

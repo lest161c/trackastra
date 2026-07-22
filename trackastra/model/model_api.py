@@ -215,6 +215,8 @@ class Trackastra:
             window_size=self.transformer.config["window"],
             progbar_class=progbar_class,
             as_torch=True,
+            imgs=imgs,
+            use_cnn=self.transformer.config.get("use_cnn", False),
         )
 
         batch_size = batch_size or self.batch_size
