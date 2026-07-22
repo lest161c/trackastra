@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def load_tiff_timeseries(
     dir: Path,
-    dtype: str | type | None = None,
+    dtype: str | type | None = np.int32,
     downscale: tuple[int, ...] | None = None,
     start_frame: int = 0,
     end_frame: int | None = None,

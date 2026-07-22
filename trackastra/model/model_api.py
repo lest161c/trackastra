@@ -382,7 +382,7 @@ class Trackastra:
         if masks_path.is_dir():
             masks = load_tiff_timeseries(masks_path)
         else:
-            masks = tifffile.imread(masks_path)
+            masks = tifffile.imread(masks_path).astype(np.int32)
 
         if len(imgs) != len(masks):
             raise RuntimeError(
