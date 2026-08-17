@@ -19,6 +19,7 @@ from .model_parts import (
     FeedForward,
     CachedDistAttention,
     GatherSparseAttention,
+    KNNMaskSparseAttention,
     PositionalEncoding,
 )
 from .cnn_encoder import ScaledCNN, load_cnn_checkpoint
@@ -412,7 +413,7 @@ class TrackingTransformer(torch.nn.Module):
         self.norm = nn.LayerNorm(d_model)
 
         if knn_neighbors > 0:
-            attn_factory = lambda: GatherSparseAttention(
+            attn_factory = lambda: KNNMaskSparseAttention(
                 coord_dim,
                 d_model,
                 nhead,
