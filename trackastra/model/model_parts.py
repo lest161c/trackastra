@@ -77,21 +77,58 @@ class PositionalEncoding(nn.Module):
 
 
 class NoPositionalEncoding(nn.Module):
-    def __init__(self, d):
-        """One learnable input token that ignores positional information."""
+    """Deterministic stand-in for :class:`PositionalEncoding` carrying no
+    per-node positional information.
+
+    Used by the coordinate-free ablation of SPEC 0002 / T2
+    (``pos_embed_per_dim=0`` in :class:`TrackingTransformer`): the model
+    must rely on the 7D regionprops appearance features alone, so the
+    positional embedding is a constant value shared by every node and
+    every coordinate dimension.  Preferred over the alternatives below
+    because it is deterministic (no RNG at forward time, unlike the
+    Gaussian-noise variant that previously lived here) and adds no
+    trainable position-like parameter (unlike a learnable shared token).
+    """
+
+    def __init__(self, d: int):
+        """Create a no-position embedding of width ``d``.
+
+        Args:
+            d: Output width.  Kept identical to the ``PositionalEncoding``
+                output it replaces (``(1 + coord_dim) * pos_embed_per_dim``,
+                which is 0 when ``pos_embed_per_dim=0``) so the downstream
+                ``proj`` layer needs no special-casing.
+        """
         super().__init__()
         self.d = d
+        # Alternative variant (kept for reference): one learnable token
+        # shared by all nodes.  Still carries no per-node position
+        # information, but adds a trainable parameter of length ``d``.
+        # The constant above is preferred because it is parameter-free
+        # and deterministic, which makes the coordinate-free baseline
+        # trivially reproducible across runs.
         # self.token = nn.Parameter(torch.randn(d))
 
-    def forward(self, coords: torch.Tensor):
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        """Return a constant embedding that ignores ``coords`` entirely.
+
+        Args:
+            coords: Coordinate tensor ``(B, N, 1 + coord_dim)``; accepted
+                only for its shape/device/dtype (interface parity with
+                :class:`PositionalEncoding`).
+
+        Returns:
+            Constant tensor of shape ``(B, N, d)`` with value 0.1
+            (upstream's intended "no position information" design),
+            independent of the coordinate values.
+        """
         B, N, _ = coords.shape
         return (
-            # torch.ones((B, N, self.d), device=coords.device) * 0.1
-            # torch.randn((1, 1, self.d), device=coords.device).expand(B, N, -1) * 0.01
-            torch.randn((B, N, self.d), device=coords.device) * 0.01
-            + torch.randn((1, 1, self.d), device=coords.device).expand(B, N, -1) * 0.1
+            torch.ones(
+                (B, N, self.d), device=coords.device, dtype=coords.dtype
+            )
+            * 0.1
         )
-        # return self.token.view(1, 1, -1).expand(B, N, -1)
 
 
 def _bin_init_exp(cutoff: float, n: int):
@@ -658,6 +695,11 @@ class CachedDistAttention(nn.Module):
     Identical semantics to RelativePositionalAttention but avoids per-layer
     cdist: the 2D distance matrix is computed once in TrackingTransformer.forward()
     and shared across all L layers. 3D cdist for distance decay is still per-layer.
+
+    ``attn_dist_mode="none"`` disables every spatial-distance-based shaping
+    of attention (the spatial cutoff mask and the distance decay bias) for
+    the coordinate-free ablation of SPEC 0002 / T2; with any other mode the
+    behaviour is unchanged.
     """
 
     def __init__(
@@ -732,24 +774,29 @@ class CachedDistAttention(nn.Module):
         if coords is not None and self._mode == "rope":
             q, k = self.rot_pos_enc(q, k, coords)
 
-        # Spatial cutoff from pre-computed 2D distances (or compute if not cached)
-        if dist_2d is not None:
-            spatial_mask = (dist_2d > self.cutoff_spatial).unsqueeze(1).expand(-1, nH, -1, -1)
-        else:
-            yx = coords[..., 1:]
-            spatial_dist = torch.cdist(yx, yx)
-            spatial_mask = (spatial_dist > self.cutoff_spatial).unsqueeze(1)
-
-        # Build mask: -inf for cells outside cutoff, 0 otherwise
+        # Build mask: -inf for cells outside cutoff, 0 otherwise.
+        # With attn_dist_mode="none" (coordinate-free ablation) no
+        # spatial-distance-based attention shaping is applied at all, so
+        # coordinates cannot influence attention through this layer; with
+        # any other mode the original behaviour is preserved exactly.
         mask = torch.zeros(B, nH, N, N, device=q.device, dtype=q.dtype)
-        mask.masked_fill_(spatial_mask, attn_ignore_val)
+        if self.attn_dist_mode != "none":
+            # Spatial cutoff from pre-computed 2D distances (or compute if not cached)
+            if dist_2d is not None:
+                spatial_mask = (dist_2d > self.cutoff_spatial).unsqueeze(1).expand(-1, nH, -1, -1)
+            else:
+                yx = coords[..., 1:]
+                spatial_dist = torch.cdist(yx, yx)
+                spatial_mask = (spatial_dist > self.cutoff_spatial).unsqueeze(1)
+            mask.masked_fill_(spatial_mask, attn_ignore_val)
 
         # Positional bias
         if coords is not None and self._mode == "bias":
             mask = mask + self.pos_bias(coords)
 
-        # Distance decay (v0 uses 3D cdist, v1 uses spatial_dist)
-        if coords is not None:
+        # Distance decay (v0 uses 3D cdist, v1 uses spatial_dist);
+        # skipped entirely for the coordinate-free attn_dist_mode="none".
+        if coords is not None and self.attn_dist_mode != "none":
             if self.attn_dist_mode == "v0":
                 dist_3d = torch.cdist(coords, coords, p=2)
                 mask = mask + torch.exp(-0.1 * dist_3d.unsqueeze(1))

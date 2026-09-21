@@ -12,7 +12,6 @@ import torch
 import yaml
 from torch import nn
 
-# NoPositionalEncoding,
 from trackastra.utils import blockwise_causal_norm
 
 from .model_parts import (
@@ -20,6 +19,7 @@ from .model_parts import (
     CachedDistAttention,
     GatherSparseAttention,
     KNNMaskSparseAttention,
+    NoPositionalEncoding,
     PositionalEncoding,
 )
 from .cnn_encoder import ScaledCNN, load_cnn_checkpoint
@@ -479,12 +479,23 @@ class TrackingTransformer(torch.nn.Module):
         else:
             self.feat_embed = nn.Identity()
 
-        self.pos_embed = PositionalEncoding(
-            cutoffs=(window,) + (spatial_pos_cutoff,) * coord_dim,
-            n_pos=(pos_embed_per_dim,) * (1 + coord_dim),
-        )
-
-        # self.pos_embed = NoPositionalEncoding(d=pos_embed_per_dim * (1 + coord_dim))
+        if pos_embed_per_dim > 0:
+            self.pos_embed = PositionalEncoding(
+                cutoffs=(window,) + (spatial_pos_cutoff,) * coord_dim,
+                n_pos=(pos_embed_per_dim,) * (1 + coord_dim),
+            )
+        else:
+            # Coordinate-free ablation (``pos_embed_per_dim=0``, SPEC 0002/T2):
+            # replace the Fourier positional encoding with a constant,
+            # deterministic no-position embedding so that no coordinate
+            # information reaches the model through the input stream.
+            # NOTE: for a fully coordinate-free run this must be combined
+            # with ``attn_positional_bias="none"`` (no RoPE in attention)
+            # and ``attn_dist_mode="none"`` (no spatial-cutoff mask /
+            # distance decay in attention), see configs/vanvliet_nope.yaml.
+            self.pos_embed = NoPositionalEncoding(
+                d=pos_embed_per_dim * (1 + coord_dim)
+            )
 
     def set_lambda_step(self, step, total):
         """Update the λ(t) step counter for cosine-decayed CNN feature injection."""
