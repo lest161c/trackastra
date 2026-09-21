@@ -220,11 +220,20 @@ class WRRandomCrop:
         self,
         crop_size: int | tuple[int] | None = None,
         ndim: int = 2,
+        seed: int | None = None,
     ) -> None:
         """crop_size: tuple of int
         can be tuple of length 1 (all dimensions)
                      of length ndim (y,x,...)
                      of length 2*ndim (y1,y2, x1,x2, ...).
+
+        seed: if given, the crop RNG is constructed deterministically as
+            ``np.random.RandomState(seed)`` so that training runs started
+            with the same seed produce identical crop draws. If None
+            (default), the RNG stays unseeded (OS entropy), which is the
+            historical behavior. Callers that want independent crop and
+            augmentation streams pass distinct derived seeds (see
+            ``CTCData._setup_features_augs_wrfeat``).
         """
         if isinstance(crop_size, int):
             crop_size = (crop_size,) * 2 * ndim
@@ -245,7 +254,12 @@ class WRRandomCrop:
         crop_size = np.array(crop_size)
         self._ndim = ndim
         self._crop_bounds = crop_size[::2], crop_size[1::2]
-        self._rng = np.random.RandomState()
+        # Seeded when a seed is given (reproducible runs), OS entropy otherwise.
+        self._rng = (
+            np.random.RandomState(seed)
+            if seed is not None
+            else np.random.RandomState()
+        )
 
     def __call__(self, features: WRFeatures):
         crop_size = self._rng.randint(self._crop_bounds[0], self._crop_bounds[1] + 1)
@@ -279,9 +293,31 @@ class WRRandomCrop:
 
 
 class WRBaseAugmentation:
-    def __init__(self, p: float = 0.5) -> None:
+    """Base class for wrfeat feature augmentations.
+
+    Each instance owns its own RNG so that augmentation draws are
+    independent of the global numpy RNG (which is owned by the sampler and
+    other consumers).
+    """
+
+    def __init__(self, p: float = 0.5, seed: int | None = None) -> None:
+        """p: probability of applying the augmentation on a given call.
+
+        seed: if given, the augmentation RNG is constructed deterministically
+            as ``np.random.RandomState(seed)`` so that training runs started
+            with the same seed produce identical augmentation draws. If None
+            (default), the RNG stays unseeded (OS entropy), which is the
+            historical behavior. Callers that want independent augmentation
+            streams pass distinct derived seeds (see
+            ``CTCData._setup_features_augs_wrfeat``).
+        """
         self._p = p
-        self._rng = np.random.RandomState()
+        # Seeded when a seed is given (reproducible runs), OS entropy otherwise.
+        self._rng = (
+            np.random.RandomState(seed)
+            if seed is not None
+            else np.random.RandomState()
+        )
 
     def __call__(self, features: WRFeatures):
         if self._rng.rand() > self._p or len(features) == 0:
@@ -363,8 +399,10 @@ class WRRandomAffine(WRBaseAugmentation):
         scale: float = (0.9, 1.1),
         shear: float = (0.1, 0.1),
         p: float = 0.5,
+        seed: int | None = None,
     ):
-        super().__init__(p)
+        """seed: forwarded to the base class RNG (see ``WRBaseAugmentation``)."""
+        super().__init__(p, seed=seed)
         self.degrees = degrees if degrees is not None else 0
         self.scale = scale if scale is not None else (1, 1)
         self.shear = shear if shear is not None else (0, 0)
@@ -401,8 +439,10 @@ class WRRandomBrightness(WRBaseAugmentation):
         scale: tuple[float] = (0.5, 2.0),
         shift: tuple[float] = (-0.1, 0.1),
         p: float = 0.5,
+        seed: int | None = None,
     ):
-        super().__init__(p)
+        """seed: forwarded to the base class RNG (see ``WRBaseAugmentation``)."""
+        super().__init__(p, seed=seed)
         self.scale = scale
         self.shift = shift
 
@@ -426,8 +466,9 @@ class WRRandomBrightness(WRBaseAugmentation):
 
 
 class WRRandomOffset(WRBaseAugmentation):
-    def __init__(self, offset: float = (-3, 3), p: float = 0.5):
-        super().__init__(p)
+    def __init__(self, offset: float = (-3, 3), p: float = 0.5, seed: int | None = None):
+        """seed: forwarded to the base class RNG (see ``WRBaseAugmentation``)."""
+        super().__init__(p, seed=seed)
         self.offset = offset
 
     def _augment(self, features: WRFeatures):
@@ -444,8 +485,9 @@ class WRRandomOffset(WRBaseAugmentation):
 class WRRandomMovement(WRBaseAugmentation):
     """random global linear shift."""
 
-    def __init__(self, offset: float = (-10, 10), p: float = 0.5):
-        super().__init__(p)
+    def __init__(self, offset: float = (-10, 10), p: float = 0.5, seed: int | None = None):
+        """seed: forwarded to the base class RNG (see ``WRBaseAugmentation``)."""
+        super().__init__(p, seed=seed)
         self.offset = offset
 
     def _augment(self, features: WRFeatures):

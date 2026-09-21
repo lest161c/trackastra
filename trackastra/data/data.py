@@ -139,6 +139,7 @@ class CTCData(Dataset):
         compress: bool = False,
         use_cnn: bool = False,
         cnn_feat_dropout: float = 0.0,
+        seed: int | None = None,
         **kwargs,
     ) -> None:
         """_summary_.
@@ -170,6 +171,14 @@ class CTCData(Dataset):
                 Compress elements/remove img if not needed to save memory for large datasets
             use_cnn (bool):
                 If True, extract 64x64 CNN patches for each cell.
+            seed (int | None):
+                Base seed for the wrfeat augmentation/crop RNGs so that
+                training runs started with the same seed produce identical
+                augmentation draws. Each cropper/augmentation object derives
+                its own RNG seed from it (see
+                ``_setup_features_augs_wrfeat``). If None (default), the
+                RNGs stay unseeded (OS entropy), which is the historical
+                behavior.
         """
         super().__init__()
 
@@ -214,7 +223,7 @@ class CTCData(Dataset):
         logger.info(f"IMG (guessed):\t{self.img_folder}")
 
         self.feat_dim, self.augmenter, self.cropper = self._setup_features_augs(
-            ndim, features, augment, crop_size
+            ndim, features, augment, crop_size, seed
         )
 
         if window_size <= 1:
@@ -306,8 +315,19 @@ class CTCData(Dataset):
         return n_divs
 
     def _setup_features_augs(
-        self, ndim: int, features: str, augment: int, crop_size: tuple[int]
+        self,
+        ndim: int,
+        features: str,
+        augment: int,
+        crop_size: tuple[int],
+        seed: int | None = None,
     ):
+        """Construct the feature augmenter and cropper for this dataset.
+
+        seed: forwarded to the wrfeat branch so its augmentation/crop RNGs
+            can be made reproducible; None keeps them unseeded (OS entropy).
+            The non-wrfeat branch does not support seeding yet.
+        """
         # Lazy import of training-only augmentation dependencies
         from trackastra.data.augmentations import (
             AugmentationPipeline,
@@ -316,7 +336,9 @@ class CTCData(Dataset):
         )
 
         if self.features == "wrfeat":
-            return self._setup_features_augs_wrfeat(ndim, features, augment, crop_size)
+            return self._setup_features_augs_wrfeat(
+                ndim, features, augment, crop_size, seed
+            )
 
         cropper = (
             RandomCrop(
@@ -963,37 +985,75 @@ class CTCData(Dataset):
     # TODO: refactor this as a subclass or make everything a class factory. *very* hacky this way
 
     def _setup_features_augs_wrfeat(
-        self, ndim: int, features: str, augment: int, crop_size: tuple[int]
+        self,
+        ndim: int,
+        features: str,
+        augment: int,
+        crop_size: tuple[int],
+        seed: int | None = None,
     ):
+        """Construct the wrfeat augmenter pipeline and random cropper.
+
+        seed: base seed for the augmentation/crop RNGs. Each RNG-bearing
+        object (the cropper first, then each pipeline augmentation in
+        construction order) derives its own seed as ``base + stream_index``
+        so its draws are independent of sibling streams; sharing one seed
+        would correlate the per-augmentation apply/skip coin flips and
+        shift augmentation statistics. ``None`` keeps the historical
+        unseeded RandomState (OS entropy).
+        """
         # FIXME: hardcoded
         feat_dim = 7 if ndim == 2 else 12
+
+        def _stream_seed(stream_index: int) -> int | None:
+            """Derive the seed for one RNG stream from the run seed.
+
+            See method docstring for the convention. Returns ``None``
+            unchanged so unseeded behavior is preserved end-to-end.
+            """
+            return None if seed is None else seed + stream_index
+
         if augment == 1:
             augmenter = wrfeat.WRAugmentationPipeline([
-                wrfeat.WRRandomFlip(p=0.5),
+                wrfeat.WRRandomFlip(p=0.5, seed=_stream_seed(1)),
                 wrfeat.WRRandomAffine(
-                    p=0.8, degrees=180, scale=(0.5, 2), shear=(0.1, 0.1)
+                    p=0.8,
+                    degrees=180,
+                    scale=(0.5, 2),
+                    shear=(0.1, 0.1),
+                    seed=_stream_seed(2),
                 ),
                 # wrfeat.WRRandomBrightness(p=0.8, factor=(0.5, 2.0)),
                 # wrfeat.WRRandomOffset(p=0.8, offset=(-3, 3)),
             ])
         elif augment == 2:
             augmenter = wrfeat.WRAugmentationPipeline([
-                wrfeat.WRRandomFlip(p=0.5),
+                wrfeat.WRRandomFlip(p=0.5, seed=_stream_seed(1)),
                 wrfeat.WRRandomAffine(
-                    p=0.8, degrees=180, scale=(0.5, 2), shear=(0.1, 0.1)
+                    p=0.8,
+                    degrees=180,
+                    scale=(0.5, 2),
+                    shear=(0.1, 0.1),
+                    seed=_stream_seed(2),
                 ),
-                wrfeat.WRRandomBrightness(p=0.8),
-                wrfeat.WRRandomOffset(p=0.8, offset=(-3, 3)),
+                wrfeat.WRRandomBrightness(p=0.8, seed=_stream_seed(3)),
+                wrfeat.WRRandomOffset(p=0.8, offset=(-3, 3), seed=_stream_seed(4)),
             ])
         elif augment == 3:
             augmenter = wrfeat.WRAugmentationPipeline([
-                wrfeat.WRRandomFlip(p=0.5),
+                wrfeat.WRRandomFlip(p=0.5, seed=_stream_seed(1)),
                 wrfeat.WRRandomAffine(
-                    p=0.8, degrees=180, scale=(0.5, 2), shear=(0.1, 0.1)
+                    p=0.8,
+                    degrees=180,
+                    scale=(0.5, 2),
+                    shear=(0.1, 0.1),
+                    seed=_stream_seed(2),
                 ),
-                wrfeat.WRRandomBrightness(p=0.8),
-                wrfeat.WRRandomMovement(offset=(-10, 10), p=0.3),
-                wrfeat.WRRandomOffset(p=0.8, offset=(-3, 3)),
+                wrfeat.WRRandomBrightness(p=0.8, seed=_stream_seed(3)),
+                wrfeat.WRRandomMovement(
+                    offset=(-10, 10), p=0.3, seed=_stream_seed(4)
+                ),
+                wrfeat.WRRandomOffset(p=0.8, offset=(-3, 3), seed=_stream_seed(5)),
             ])
         else:
             augmenter = None
@@ -1002,6 +1062,7 @@ class CTCData(Dataset):
             wrfeat.WRRandomCrop(
                 crop_size=crop_size,
                 ndim=ndim,
+                seed=_stream_seed(0),
             )
             if crop_size is not None
             else None

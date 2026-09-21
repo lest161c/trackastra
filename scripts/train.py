@@ -891,6 +891,7 @@ def train(args):
         crop_size=args.crop_size,
         compress=args.compress,
         use_gt=args.use_gt,
+        seed=args.seed,
         slice_pct=(0.0, args.train_fraction),
         use_cnn=args.use_cnn,
         cnn_feat_dropout=args.cnn_feat_dropout,
