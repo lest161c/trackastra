@@ -568,9 +568,29 @@ class TrackingTransformer(torch.nn.Module):
 
         knn = self.config.get("knn_neighbors", -1)
         if knn > 0 and knn_indices is None and coords is not None:
-            yx = coords[..., 1:].float()
-            dist = torch.cdist(yx, yx)
-            knn_indices = dist.topk(knn + 1, dim=-1, largest=False)[1][..., 1:]
+            num_nodes = coords.shape[1]
+            if num_nodes >= knn + 1:
+                yx = coords[..., 1:].float()
+                dist = torch.cdist(yx, yx)
+                knn_indices = dist.topk(knn + 1, dim=-1, largest=False)[1][..., 1:]
+            else:
+                # K>N guard (SPEC 0002 / T4): crops with fewer cells than
+                # knn+1 crash torch.topk ("selected index k out of range").
+                # The historical K-sweep (seed 42, K up to 64) only survived
+                # because the old cluster clone carried a local K>N clamp
+                # patch that was never pushed (parent commit 65e616f).
+                # Leaving knn_indices=None routes the sparse-attention layers
+                # to their existing dense-SDPA fallback; a literal
+                # knn_eff = knn-1 clamp would still break the
+                # knn_indices.expand(..., knn) when num_nodes == knn exactly.
+                logger.debug(
+                    "Skipping KNN index computation: graph has %d nodes < "
+                    "knn+1 = %d (knn_neighbors=%d); sparse attention falls "
+                    "back to dense SDPA.",
+                    num_nodes,
+                    knn + 1,
+                    knn,
+                )
 
         dist_2d = torch.cdist(coords[..., 1:].float(), coords[..., 1:].float())
 
@@ -609,9 +629,24 @@ class TrackingTransformer(torch.nn.Module):
 
         knn = self.config.get("knn_neighbors", -1)
         if knn > 0 and knn_indices is None and coords is not None:
-            yx = coords[..., 1:].float()
-            dist = torch.cdist(yx, yx)
-            knn_indices = dist.topk(knn + 1, dim=-1, largest=False)[1][..., 1:]
+            num_nodes = coords.shape[1]
+            if num_nodes >= knn + 1:
+                yx = coords[..., 1:].float()
+                dist = torch.cdist(yx, yx)
+                knn_indices = dist.topk(knn + 1, dim=-1, largest=False)[1][..., 1:]
+            else:
+                # K>N guard (SPEC 0002 / T4), same rationale as in forward():
+                # SSL crops with fewer cells than knn+1 would crash topk;
+                # leaving knn_indices=None triggers the dense-SDPA fallback
+                # in the sparse-attention layers.
+                logger.debug(
+                    "Skipping KNN index computation: graph has %d nodes < "
+                    "knn+1 = %d (knn_neighbors=%d); sparse attention falls "
+                    "back to dense SDPA.",
+                    num_nodes,
+                    knn + 1,
+                    knn,
+                )
 
         dist_2d = torch.cdist(coords[..., 1:].float(), coords[..., 1:].float())
 
