@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable, Hashable
 from itertools import chain
 
 import networkx as nx
@@ -89,7 +90,45 @@ def build_graph(
     max_distance: int | None = None,
     max_neighbors: int | None = None,
     delta_t=1,
+    weight_lookup: Callable[[Hashable, Hashable], float | None] | None = None,
 ) -> nx.DiGraph:
+    """Build a candidate tracking graph from per-node detections.
+
+    Candidate edges connect nodes in frames ``t`` and ``t + delta_t`` that
+    are within ``max_distance`` and among the ``max_neighbors`` nearest
+    neighbours. Edge weights come from one of three sources, in this
+    precedence order:
+
+    1. ``use_distance=True`` ignores ``weights`` and ``weight_lookup`` and
+       assigns ``1 - distance / max_distance``.
+    2. A non-empty ``weights`` iterable of ``((node_in, node_out), weight)``
+       pairs assigns the supplied weight; pairs absent from the iterable are
+       skipped.
+    3. When ``weights`` is ``None`` and ``use_distance`` is ``False``, an
+       optional ``weight_lookup`` callable is asked for each candidate edge.
+       A non-``None`` return value adds the edge with that weight; a
+       ``None`` return value skips it. This lazy path avoids materialising
+       the full ``N x N`` weight dictionary.
+
+    Args:
+        nodes: Iterable of node dictionaries with ``id``, ``time``,
+            ``label``, and ``coords`` entries.
+        weights: Optional iterable of ``((node_in, node_out), weight)``
+            pairs. Takes precedence over ``weight_lookup``.
+        use_distance: If ``True``, use distance-derived weights and ignore
+            both ``weights`` and ``weight_lookup``.
+        max_distance: Maximum spatial distance for a candidate edge, or
+            ``None`` for no limit.
+        max_neighbors: Maximum number of accepted candidate edges per source
+            node, or ``None`` for no limit.
+        delta_t: Maximum frame gap between connected nodes.
+        weight_lookup: Optional read-only callable mapping
+            ``(node_in, node_out)`` to a weight or ``None``. Only consulted
+            when ``weights`` is ``None`` and ``use_distance`` is ``False``.
+
+    Returns:
+        Directed candidate graph whose edges point forward in time.
+    """
     logger.info(f"Build candidate graph with {delta_t=}")
     G = nx.DiGraph()
 
@@ -106,6 +145,10 @@ def build_graph(
             # index=node["index"],
             weight=1,
         )
+
+    use_weight_lookup = (
+        weight_lookup is not None and weights is None and not use_distance
+    )
 
     if use_distance:
         weights = None
@@ -159,7 +202,12 @@ def build_graph(
                     break
                 dist = dists[_i, _j]
                 if max_distance is None or dist <= max_distance:
-                    if weights is None:
+                    if use_weight_lookup:
+                        lookup_weight = weight_lookup(_ni, _nj)
+                        if lookup_weight is not None:
+                            G.add_edge(_ni, _nj, weight=lookup_weight)
+                            neighbors += 1
+                    elif weights is None:
                         G.add_edge(_ni, _nj, weight=1 - dist / max_distance)
                         neighbors += 1
                     else:
