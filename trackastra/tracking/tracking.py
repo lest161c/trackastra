@@ -152,7 +152,7 @@ def build_graph(
 
     if use_distance:
         weights = None
-    if weights:
+    if weights is not None:
         weights = {w[0]: w[1] for w in weights}
 
     graph = TrackGraph(G, frame_attribute="time")
@@ -191,29 +191,67 @@ def build_graph(
         for _nj in nj:
             pj.append(np.array(G.nodes[_nj]["coords"]))
         pj = np.stack(pj)
+        nj_array = np.asarray(nj)
 
         dists = scipy.spatial.distance.cdist(pi, pj)
 
+        def add_candidate(_ni, _j, dist_row):
+            dist = dist_row[_j]
+            if max_distance is not None and dist > max_distance:
+                return False
+            if use_weight_lookup:
+                lookup_weight = weight_lookup(_ni, nj_array[_j])
+                if lookup_weight is None:
+                    return False
+                G.add_edge(_ni, nj_array[_j], weight=lookup_weight)
+            elif weights is None:
+                G.add_edge(
+                    _ni, nj_array[_j], weight=1 - dist / max_distance
+                )
+            else:
+                edge_weight = weights.get((_ni, nj_array[_j]))
+                if edge_weight is None:
+                    return False
+                G.add_edge(_ni, nj_array[_j], weight=edge_weight)
+            return True
+
         for _i, _ni in enumerate(ni):
-            inds = np.argsort(dists[_i])
+            dist_row = dists[_i]
+            if max_neighbors and len(nj) > max_neighbors:
+                candidate_count = min(len(nj), max_neighbors * 4)
+                candidate_indices = np.argpartition(
+                    dist_row, candidate_count - 1
+                )[:candidate_count]
+                candidate_indices = candidate_indices[
+                    np.argsort(dist_row[candidate_indices])
+                ]
+            else:
+                candidate_indices = np.argsort(dist_row)
+
             neighbors = 0
-            for _j, _nj in zip(inds, np.array(nj)[inds]):
+            for _j in candidate_indices:
                 if max_neighbors and neighbors >= max_neighbors:
                     break
-                dist = dists[_i, _j]
-                if max_distance is None or dist <= max_distance:
-                    if use_weight_lookup:
-                        lookup_weight = weight_lookup(_ni, _nj)
-                        if lookup_weight is not None:
-                            G.add_edge(_ni, _nj, weight=lookup_weight)
-                            neighbors += 1
-                    elif weights is None:
-                        G.add_edge(_ni, _nj, weight=1 - dist / max_distance)
+                if add_candidate(_ni, _j, dist_row):
+                    neighbors += 1
+
+            if (
+                max_neighbors
+                and neighbors < max_neighbors
+                and len(candidate_indices) < len(nj)
+            ):
+                remaining_indices = np.setdiff1d(
+                    np.arange(len(nj)),
+                    candidate_indices,
+                    assume_unique=True,
+                )
+                for _j in remaining_indices[
+                    np.argsort(dist_row[remaining_indices])
+                ]:
+                    if neighbors >= max_neighbors:
+                        break
+                    if add_candidate(_ni, _j, dist_row):
                         neighbors += 1
-                    else:
-                        if (_ni, _nj) in weights:
-                            G.add_edge(_ni, _nj, weight=weights[(_ni, _nj)])
-                            neighbors += 1
 
         e_added = len(G.edges) - n_edges_t
         if e_added == 0:
