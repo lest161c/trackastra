@@ -674,8 +674,11 @@ class TrackingTransformer(torch.nn.Module):
         assert coords.ndim == 3
         assert coords.shape[2] == 1 + self.config["coord_dim"]
 
-        # spatial distances
-        dist = torch.cdist(coords[:, :, 1:], coords[:, :, 1:])
+        # spatial distances. cdist has no Half CUDA kernel on the H100
+        # stack, so compute the cutoff distances in float32; they are only
+        # used to build the boolean invalid mask.
+        spatial_coords = coords[:, :, 1:].float()
+        dist = torch.cdist(spatial_coords, spatial_coords)
         invalid = dist > self.config["spatial_pos_cutoff"]
         invalid = (
             invalid | (timepoints.unsqueeze(1) == -1) | (timepoints.unsqueeze(2) == -1)
