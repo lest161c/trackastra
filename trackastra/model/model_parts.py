@@ -461,7 +461,9 @@ class GatherSparseAttention(nn.Module):
             attn_mask = None
             if padding_mask is not None:
                 attn_mask = padding_mask.unsqueeze(1).unsqueeze(2)
-                attn_mask = attn_mask * torch.finfo(q.dtype).min
+                attn_mask = (
+                    attn_mask * torch.finfo(q.dtype).min
+                ).to(dtype=q.dtype)
             y = F.scaled_dot_product_attention(
                 q, k, v, attn_mask=attn_mask,
                 dropout_p=self.dropout if self.training else 0,
@@ -657,7 +659,9 @@ class KNNMaskSparseAttention(nn.Module):
             attn_mask = None
             if padding_mask is not None:
                 attn_mask = padding_mask.unsqueeze(1).unsqueeze(2)
-                attn_mask = attn_mask * torch.finfo(projected_query.dtype).min
+                attn_mask = (
+                    attn_mask * torch.finfo(projected_query.dtype).min
+                ).to(dtype=projected_query.dtype)
             attn_output = F.scaled_dot_product_attention(
                 projected_query, projected_key, projected_value,
                 attn_mask=attn_mask,

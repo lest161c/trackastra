@@ -61,18 +61,24 @@ def predict(batch: list[dict], model: TrackingTransformer) -> np.ndarray:
 
     # Hack that assumes that all parameters of a model are on the same device
     device = next(model.parameters()).device
+    model_dtype = next(model.parameters()).dtype
     if feats is not None:
-        feats = feats.to(device)
+        feats = feats.to(device=device, dtype=model_dtype)
     if pretrained_feats is not None:
-        pretrained_feats = pretrained_feats.unsqueeze(0).to(device)
+        pretrained_feats = pretrained_feats.unsqueeze(0).to(
+            device=device, dtype=model_dtype
+        )
     if patches_cnn is not None:
-        patches_cnn = patches_cnn.to(device)
+        patches_cnn = patches_cnn.to(device=device, dtype=model_dtype)
     timepoints = timepoints.to(device)
     coords = coords.to(device)
     padding_mask = padding_mask.to(device)
 
-    # Concat timepoints to coordinates
+    # Concat timepoints to coordinates. The concat promotes to float32 because
+    # timepoints are cast to float; cast back to the model dtype so fp16/bf16
+    # inference does not mix Float inputs with Half weights.
     coords = torch.cat((timepoints.unsqueeze(2).float(), coords), dim=2)
+    coords = coords.to(dtype=model_dtype)
     with torch.no_grad():
         if pretrained_feats is None:
             A = model(
